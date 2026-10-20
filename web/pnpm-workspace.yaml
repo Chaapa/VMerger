@@ -1,0 +1,6 @@
+packages:
+  - .
+enableGlobalVirtualStore: false
+nodeLinker: hoisted
+allowBuilds:
+  esbuild: true
