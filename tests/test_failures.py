@@ -165,3 +165,37 @@ def test_cancel_and_missing_objects(client, project):
     assert client.get("/livez").status_code == 200
     assert client.delete("/api/session").status_code == 200
     assert client.get("/api/projects").status_code == 401
+
+
+def test_cleanup_removes_only_unpublished_objects(client, project, videos):
+    from vmerger import cleanup, storage
+
+    prefix = f"/api/projects/{project['id']}"
+    path = videos[0][0]
+    asset = client.post(prefix + "/assets?name=original.mp4", content=path.read_bytes()).json()
+    client.post(prefix + "/assets?name=duplicate.mp4", content=path.read_bytes())
+    cleanup.main()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM storage_objects WHERE project_id=%s", (project["id"],)).fetchall()
+    assert {r["status"] for r in rows} == {"available", "deleted"}
+    original = next(r for r in rows if str(r["id"]) == asset["storage_object_id"])
+    assert (
+        storage.client().head_object(Bucket=original["bucket"], Key=original["object_key"])["ContentLength"]
+        > 0
+    )
+
+
+def test_initialization_retries_unready_storage_then_succeeds(database, monkeypatch):
+    from vmerger import initialize
+
+    calls = []
+
+    def unavailable_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise ConnectionError()
+
+    monkeypatch.setattr(initialize, "ensure_bucket", unavailable_once)
+    monkeypatch.setattr(initialize.time, "sleep", lambda _: None)
+    initialize.main()
+    assert len(calls) == 2
