@@ -1,0 +1,10 @@
+{
+  "uid": "vmerger-operations", "title": "VMerger · Operations", "schemaVersion": 41,
+  "version": 1, "refresh": "15s", "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {"id":1,"type":"timeseries","title":"Jobs by state","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"x":0,"y":0,"w":12,"h":9},"targets":[{"expr":"sum by (queue,status) (vmerger_jobs)","legendFormat":"{{queue}} / {{status}}","refId":"A"}]},
+    {"id":2,"type":"timeseries","title":"Oldest queued job (seconds)","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"x":12,"y":0,"w":12,"h":9},"targets":[{"expr":"vmerger_oldest_queued_seconds","legendFormat":"{{queue}}","refId":"A"}]},
+    {"id":3,"type":"timeseries","title":"Failed provider calls in the last hour","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"x":0,"y":9,"w":12,"h":9},"targets":[{"expr":"vmerger_failed_calls","legendFormat":"Failed calls","refId":"A"}]},
+    {"id":4,"type":"timeseries","title":"API scrape availability","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"x":12,"y":9,"w":12,"h":9},"targets":[{"expr":"up{job=\"vmerger\"}","legendFormat":"API","refId":"A"}]}
+  ]
+}

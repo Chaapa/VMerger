@@ -1,0 +1,18 @@
+groups:
+  - name: vmerger
+    rules:
+      - alert: VMergerUnavailable
+        expr: up{job="vmerger"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: "VMerger API metrics are unavailable"}
+      - alert: VMergerQueueStalled
+        expr: vmerger_oldest_queued_seconds > 600
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "A video processing queue has been waiting for over 10 minutes"}
+      - alert: VMergerProviderErrors
+        expr: vmerger_failed_calls > 5
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "More than five failed provider calls in the last hour"}

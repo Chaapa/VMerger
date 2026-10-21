@@ -1,0 +1,84 @@
+name: vmerger
+x-app: &app
+  build: .
+  env_file: .env
+  environment: &environment
+    DATABASE_URL: postgresql://vmerger:${POSTGRES_PASSWORD:?Run scripts/configure.py}@db:5432/vmerger
+    S3_ENDPOINT: http://storage:8333
+    FFMPEG_BIN: ffmpeg
+    FFPROBE_BIN: ffprobe
+    SCRATCH_DIR: /tmp/vmerger
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg18
+    environment:
+      POSTGRES_DB: vmerger
+      POSTGRES_USER: vmerger
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/configure.py}
+    volumes: ["postgres:/var/lib/postgresql"]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U vmerger -d vmerger"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  storage:
+    image: chrislusf/seaweedfs:4.49
+    command: [mini, "-dir=/data", "-ip=storage", "-ip.bind=0.0.0.0", "-s3.port=8333", "-s3.config=/etc/vmerger/s3.json", "-admin.ui=false", "-webdav=false", "-s3.port.iceberg=0", "-volume.max=8"]
+    volumes:
+      - ${MEDIA_ROOT:-./.local/media}:/data
+      - ./.local/s3.json:/etc/vmerger/s3.json:ro
+    restart: unless-stopped
+  init:
+    <<: *app
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+      storage: {condition: service_started}
+    command: [python, -m, vmerger.initialize]
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      init: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  worker:
+    <<: *app
+    command: [python, -m, vmerger.worker]
+    depends_on:
+      init: {condition: service_completed_successfully}
+  prometheus:
+    image: prom/prometheus:v3.7.2
+    profiles: [monitoring]
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./.local/metrics-token:/run/secrets/metrics-token:ro
+      - prometheus:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:12.2.1
+    profiles: [monitoring]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${APP_TOKEN}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    ports: ["127.0.0.1:3000:3000"]
+    restart: unless-stopped
+
+volumes:
+  postgres:
+  prometheus:
+  grafana:

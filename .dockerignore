@@ -1,0 +1,12 @@
+.git
+.env*
+.local
+.venv
+**/node_modules
+**/dist
+**/__pycache__
+**/.pytest_cache
+.coverage*
+htmlcov
+*.mp4
+*.wav
