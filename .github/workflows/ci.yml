@@ -30,8 +30,12 @@ jobs:
           docker compose logs --tail=80
           exit 1
       - run: ruff check vmerger migrations tests
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: pytest --integration --cov=vmerger --cov-report=xml --cov-report=json:.local/coverage.json --cov-fail-under=85
+      - name: Test the actual application container
+        run: |
+          docker compose run --rm --no-deps --user "$(id -u):$(id -g)" \
+            -v "$PWD:/workspace" -w /workspace api \
+            python -m pytest --integration --cov=vmerger --cov-report=xml \
+            --cov-report=json:.local/coverage.json --cov-fail-under=85
       - run: python scripts/check_coverage.py
       - run: pnpm --dir web exec playwright install --with-deps chromium
       - run: pnpm --dir web exec playwright test
@@ -43,6 +47,7 @@ jobs:
             sleep 2
           done
           exit 1
+      - run: python scripts/check_monitoring.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
