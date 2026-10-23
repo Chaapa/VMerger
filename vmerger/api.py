@@ -327,9 +327,17 @@ def analyze_pending(project_id: UUID, user=Depends(owner)):
         assets = conn.execute(
             "SELECT id FROM assets WHERE project_id=%s AND kind='video' AND status<>'ready'", (project_id,)
         ).fetchall()
+        queued = 0
         for asset in assets:
-            enqueue(conn, project_id, "analyze_asset", {"asset_id": str(asset["id"])}, str(uuid4()))
-        return {"queued": len(assets)}
+            active = conn.execute(
+                """SELECT 1 FROM jobs WHERE project_id=%s AND kind='analyze_asset'
+                AND status IN ('queued','running') AND input->>'asset_id'=%s""",
+                (project_id, str(asset["id"])),
+            ).fetchone()
+            if not active:
+                enqueue(conn, project_id, "analyze_asset", {"asset_id": str(asset["id"])}, str(uuid4()))
+                queued += 1
+        return {"queued": queued}
 
 
 @app.post("/api/projects/{project_id}/jobs/{job_id}/cancel")

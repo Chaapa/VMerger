@@ -59,6 +59,7 @@ def test_real_pipeline_roundtrip_versions_and_metrics(client, project, videos, m
     assert audio.status_code == 201, audio.text
     monkeypatch.setattr(settings(), "gemini_api_key", "test-fixture-no-network")
     assert client.post(prefix + "/analyze").status_code == 202
+    assert client.post(prefix + "/analyze").json()["queued"] == 0
     drain()
     snapshot = client.get(prefix).json()
     assert all(a["status"] == "ready" for a in snapshot["assets"])
