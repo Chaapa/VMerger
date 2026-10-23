@@ -92,9 +92,12 @@ def test_provider_adapter_records_success_and_failure_without_network(project, m
     monkeypatch.setattr(provider.client.models, "generate_content", fail)
     with pytest.raises(TimeoutError):
         provider.call("reviewer", "Fixture prompt", Review)
+    monkeypatch.setattr(provider.client.models, "embed_content", fail)
+    with pytest.raises(TimeoutError):
+        provider.embed(["fixture"])
     with connect() as conn:
         calls = conn.execute(
-            "SELECT * FROM ai_calls WHERE job_id=%s ORDER BY created_at", (job["id"],)
+            "SELECT * FROM ai_calls WHERE job_id=%s AND purpose='reviewer' ORDER BY created_at", (job["id"],)
         ).fetchall()
         assert [c["status"] for c in calls] == ["succeeded", "failed"]
         assert calls[0]["input_tokens"] == 30

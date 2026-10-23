@@ -400,7 +400,10 @@ def search(project_id: UUID, q: str, semantic: bool = False, user=Depends(owner)
             raise HTTPException(503, "Gemini is not configured")
         from .providers import Gemini
 
-        vector = Gemini(None).embed([q], query=True)[0]
+        try:
+            vector = Gemini({"project_id": project_id, "id": None}).embed([q], query=True)[0]
+        except Exception:
+            raise HTTPException(503, "Semantic search provider unavailable") from None
         with connect() as conn:
             project_access(conn, project_id, user)
             return conn.execute(

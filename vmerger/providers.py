@@ -84,14 +84,46 @@ class Gemini:
         )
 
     def embed(self, texts, query=False):
-        result = self.client.models.embed_content(
-            model=settings().embedding_model,
-            contents=texts,
-            config=types.EmbedContentConfig(
-                output_dimensionality=768, task_type="RETRIEVAL_QUERY" if query else "RETRIEVAL_DOCUMENT"
-            ),
-        )
-        return [normalize_embedding(x.values) for x in result.embeddings]
+        purpose = "embedding_query" if query else "embedding_document"
+        with connect() as conn:
+            call_id = conn.execute(
+                """INSERT INTO ai_calls(project_id,job_id,provider,model,purpose,
+                request_fingerprint,status) VALUES (%s,%s,'gemini',%s,%s,%s,'running') RETURNING id""",
+                (
+                    self.job["project_id"],
+                    self.job["id"],
+                    settings().embedding_model,
+                    purpose,
+                    canonical_hash({"texts": texts, "purpose": purpose}),
+                ),
+            ).fetchone()["id"]
+        started = time.monotonic()
+        try:
+            result = self.client.models.embed_content(
+                model=settings().embedding_model,
+                contents=texts,
+                config=types.EmbedContentConfig(
+                    output_dimensionality=768, task_type="RETRIEVAL_QUERY" if query else "RETRIEVAL_DOCUMENT"
+                ),
+            )
+            vectors = [normalize_embedding(x.values) for x in result.embeddings]
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE ai_calls SET status='succeeded',duration_ms=%s WHERE id=%s",
+                    (round((time.monotonic() - started) * 1000), call_id),
+                )
+            return vectors
+        except Exception as error:
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE ai_calls SET status='failed',duration_ms=%s,error=%s WHERE id=%s",
+                    (
+                        round((time.monotonic() - started) * 1000),
+                        jsonb({"type": type(error).__name__}),
+                        call_id,
+                    ),
+                )
+            raise
 
 
 def context_json(value):

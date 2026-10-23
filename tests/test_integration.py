@@ -64,6 +64,11 @@ def test_real_pipeline_roundtrip_versions_and_metrics(client, project, videos, m
     snapshot = client.get(prefix).json()
     assert all(a["status"] == "ready" for a in snapshot["assets"])
     assert len(client.get(prefix + "/search?q=beach").json()) == 2
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "vmerger.providers.Gemini.embed", lambda self, texts, query=False: [[1.0] + [0.0] * 767]
+        )
+        assert len(client.get(prefix + "/search?q=beach&semantic=true").json()) == 2
     with connect() as conn:
         assert (
             conn.execute(
