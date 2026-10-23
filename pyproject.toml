@@ -17,6 +17,7 @@ include = ["vmerger*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = ["integration: requires PostgreSQL, S3 and FFmpeg"]
 
 [tool.ruff]
