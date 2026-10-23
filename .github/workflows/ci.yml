@@ -35,6 +35,14 @@ jobs:
       - run: python scripts/check_coverage.py
       - run: pnpm --dir web exec playwright install --with-deps chromium
       - run: pnpm --dir web exec playwright test
+      - name: Verify monitoring configuration
+        run: |
+          docker compose --profile monitoring up -d prometheus grafana
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9090/-/ready && curl --fail --silent http://127.0.0.1:3000/api/health; then exit 0; fi
+            sleep 2
+          done
+          exit 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -45,4 +53,4 @@ jobs:
             web/test-results/
             docs/images/
       - if: always()
-        run: docker compose -f compose.yaml -f deploy/compose.ci.yaml down -v
+        run: docker compose --profile monitoring -f compose.yaml -f deploy/compose.ci.yaml down -v

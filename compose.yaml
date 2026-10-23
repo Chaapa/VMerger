@@ -27,7 +27,7 @@ services:
       retries: 20
     restart: unless-stopped
   storage:
-    image: chrislusf/seaweedfs:4.49
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
     command: [mini, "-dir=/data", "-ip=storage", "-ip.bind=0.0.0.0", "-s3.port=8333", "-s3.config=/etc/vmerger/s3.json", "-admin.ui=false", "-webdav=false", "-s3.port.iceberg=0", "-volume.max=8"]
     volumes:
       - ${MEDIA_ROOT:-./.local/media}:/data
