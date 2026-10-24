@@ -8,7 +8,7 @@ from typing import Protocol
 
 import httpx
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from . import media
 from .ai_config import credentials, load_routing
@@ -141,6 +141,14 @@ class CompatibleAdapter:
 ADAPTERS = {"gemini": GeminiAdapter, "openai_compatible": CompatibleAdapter}
 
 
+class ProviderUnavailable(ConnectionError):
+    """A transient inference transport failure, distinct from a database failure."""
+
+
+class ProviderTimeout(TimeoutError):
+    """A timed-out inference request, eligible for explicitly configured fallback."""
+
+
 class ProviderRouter:
     def __init__(self, job):
         self.job = job
@@ -152,8 +160,8 @@ class ProviderRouter:
     def embedding_profile(self):
         return self.routing.embedding_profile
 
-    def describe(self, role):
-        route = self.routing.route(role)
+    def describe(self, role, route=None):
+        route = route or self.routing.route(role)
         config = self.routing.providers[route.provider]
         result = {"provider": route.provider, "adapter": config.adapter, "model": route.model}
         if role == "analyst":
@@ -161,8 +169,8 @@ class ProviderRouter:
             result["frame_samples"] = self.routing.frame_samples
         return result
 
-    def adapter(self, role):
-        route = self.routing.route(role)
+    def adapter(self, role, route=None):
+        route = route or self.routing.route(role)
         if route.provider not in self.adapters:
             config = self.routing.providers[route.provider]
             key = self.keys[route.provider]
@@ -171,8 +179,8 @@ class ProviderRouter:
             self.adapters[route.provider] = ADAPTERS[config.adapter](config, key)
         return self.adapters[route.provider]
 
-    def audited(self, role, purpose, fingerprint, operation):
-        route = self.routing.route(role)
+    def audited(self, role, purpose, fingerprint, operation, route=None):
+        route = route or self.routing.route(role)
         with connect() as conn:
             call_id = conn.execute(
                 """INSERT INTO ai_calls(project_id,job_id,provider,model,purpose,
@@ -209,26 +217,38 @@ class ProviderRouter:
             raise
 
     def call(self, role, prompt, schema, video: Path | None = None, duration=None):
-        def operation():
-            text, input_tokens, output_tokens = self.adapter(role).generate(
-                self.routing.route(role).model,
-                prompt,
-                schema,
-                video,
-                duration,
-                self.routing,
-            )
+        def operation(route):
+            # Classify only inference errors: storage/audit failures must never send
+            # the same prompt to another provider or hide a failed DB transaction.
+            try:
+                text, input_tokens, output_tokens = self.adapter(role, route).generate(
+                    route.model, prompt, schema, video, duration, self.routing
+                )
+            except (TimeoutError, httpx.TimeoutException):
+                raise ProviderTimeout("AI endpoint timed out") from None
+            except (ConnectionError, httpx.TransportError):
+                raise ProviderUnavailable("AI endpoint unavailable") from None
+            except errors.APIError as error:
+                if error.code == 429 or 500 <= error.code < 600:
+                    raise ProviderUnavailable("AI endpoint temporarily unavailable") from None
+                raise ValueError("AI endpoint rejected the request") from None
             parsed = schema.model_validate_json(text)
             if (
                 video
-                and self.describe(role)["input_mode"] == "sampled_frames"
+                and self.describe(role, route)["input_mode"] == "sampled_frames"
                 and any(s.speech for s in parsed.scenes)
             ):
                 raise ValueError("Frame-only analysis cannot transcribe speech")
             return parsed, input_tokens, output_tokens
 
-        fingerprint = {"role": self.describe(role), "prompt": prompt, "schema": schema.__name__}
-        return self.audited(role, role, fingerprint, operation)
+        targets = [self.routing.route(role), *self.routing.fallbacks.get(role, [])]
+        for index, route in enumerate(targets):
+            fingerprint = {"role": self.describe(role, route), "prompt": prompt, "schema": schema.__name__}
+            try:
+                return self.audited(role, role, fingerprint, lambda: operation(route), route=route)
+            except (ProviderUnavailable, ProviderTimeout):
+                if index == len(targets) - 1:
+                    raise
 
     def analyze(self, path, duration):
         return self.call(

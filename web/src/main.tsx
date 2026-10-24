@@ -96,7 +96,12 @@ function App() {
     config_error: false,
     routes: {} as Record<
       string,
-      { provider: string; model: string; configured: boolean }
+      {
+        provider: string;
+        model: string;
+        configured: boolean;
+        fallbacks?: { provider: string; model: string; configured: boolean }[];
+      }
     >,
     max_upload_mb: 500,
     max_asset_seconds: 600,
@@ -607,6 +612,17 @@ function App() {
                         <b>{aiRoles[role] || role}</b>
                         <span>
                           {route.provider} · {route.model}
+                          {route.fallbacks?.map((backup, index) => (
+                            <small
+                              className="muted"
+                              key={`${backup.provider}/${backup.model}`}
+                            >
+                              <br />
+                              Резерв {index + 1}: {backup.provider} ·{" "}
+                              {backup.model}
+                              {backup.configured ? "" : " · нужен ключ"}
+                            </small>
+                          ))}
                         </span>
                         <span className="badge">
                           {route.configured ? "Настроен" : "Нужен ключ"}

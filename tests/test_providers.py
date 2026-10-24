@@ -180,7 +180,7 @@ def test_compatible_chat_protocol(routing_file, mock_http, mode, token_field):
 
 def test_compatible_frames_are_timestamped_and_audio_is_rejected(routing_file, mock_http, monkeypatch):
     router = ProviderRouter({})
-    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation: operation()[0])
+    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation, **kw: operation()[0])
     monkeypatch.setattr(media, "sample_frames", lambda *args: [(0.5, b"jpeg"), (1.5, b"jpeg")])
     answer = {"scenes": [{"start": 0, "end": 2, "description": "Test", "speech": ""}]}
 
@@ -232,7 +232,7 @@ def test_transport_failures_are_retryable(routing_file, mock_http, failure, erro
 
 def test_embeddings_reorder_validate_dimensions_and_apply_prefixes(routing_file, mock_http, monkeypatch):
     router = ProviderRouter({})
-    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation: operation()[0])
+    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation, **kw: operation()[0])
     adapter = router.adapter("embedding")
     adapter.config = adapter.config.model_copy(
         update={"query_prefix": "query: ", "document_prefix": "passage: "}
@@ -328,3 +328,194 @@ def test_sample_frames_uses_real_ffmpeg(videos):
     frames = list(media.sample_frames(videos[0][0], 2, 2))
     assert [time for time, _ in frames] == [0.5, 1.5]
     assert all(jpeg.startswith(b"\xff\xd8") for _, jpeg in frames)
+
+
+@pytest.fixture
+def fallback_file(routing_file, monkeypatch):
+    with routing_file.open("a") as stream:
+        stream.write("""
+[providers.backup]
+adapter = "openai_compatible"
+api_key_env = "VMERGER_BACKUP_KEY"
+base_url = "http://backup.local/v1"
+[fallbacks]
+reviewer = [{provider = "backup", model = "backup-reviewer"}]
+""")
+    monkeypatch.setenv("VMERGER_BACKUP_KEY", "backup-fixture-key")
+    return routing_file
+
+
+@pytest.mark.parametrize("failure", [None, 429, 503, "timeout", "connection"])
+def test_fallback_uses_ordered_targets_only_after_transient_failure(
+    fallback_file, mock_http, monkeypatch, failure
+):
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        if request.url.host == "localhost":
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private diagnostics")
+            if failure == "connection":
+                raise httpx.ConnectError("private diagnostics")
+            if failure:
+                return httpx.Response(failure, text="private diagnostics")
+        else:
+            assert request.headers["Authorization"] == "Bearer backup-fixture-key"
+            assert json.loads(request.content)["model"] == "backup-reviewer"
+        return httpx.Response(200, json=completion())
+
+    mock_http(handle)
+    router = ProviderRouter({})
+    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation, **kw: operation()[0])
+    assert router.call("reviewer", "Review", Review).approved
+    assert calls == (["localhost", "backup.local"] if failure else ["localhost"])
+
+
+@pytest.mark.parametrize("failure", [400, 401, "schema", "refusal", "truncated", "credentials", "database"])
+def test_fallback_does_not_mask_permanent_or_audit_failures(fallback_file, mock_http, monkeypatch, failure):
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        assert request.url.host == "localhost"
+        if isinstance(failure, int):
+            return httpx.Response(failure, text="private diagnostics")
+        answer = completion(
+            text="{}" if failure == "schema" else '{"approved":true,"issues":[]}',
+            refusal="declined" if failure == "refusal" else None,
+            reason="length" if failure == "truncated" else "stop",
+        )
+        return httpx.Response(200, json=answer)
+
+    def audit(role, purpose, fingerprint, operation, **kw):
+        result = operation()[0]
+        if failure == "database":
+            raise ConnectionError("DB publication failed")
+        return result
+
+    mock_http(handle)
+    router = ProviderRouter({})
+    monkeypatch.setattr(router, "audited", audit)
+    if failure == "credentials":
+        router.keys["local"] = ""
+    with pytest.raises(ConnectionError if failure == "database" else ValueError):
+        router.call("reviewer", "Review", Review)
+    assert calls == ([] if failure == "credentials" else ["localhost"])
+
+
+def test_fallback_exhaustion_is_bounded_and_remains_retryable(fallback_file, mock_http, monkeypatch):
+    from vmerger.providers import ProviderUnavailable
+
+    router = ProviderRouter({})
+    router.routing.fallbacks["reviewer"].append(Route(provider="backup", model="second-backup"))
+    calls = []
+
+    def handle(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(503, text="private diagnostics")
+
+    mock_http(handle)
+    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation, **kw: operation()[0])
+    with pytest.raises(ProviderUnavailable):
+        router.call("reviewer", "Review", Review)
+    assert calls == ["fixture-reviewer", "backup-reviewer", "second-backup"]
+
+
+@pytest.mark.parametrize("status", [429, 503, 401])
+def test_gemini_failover_uses_same_error_policy(fallback_file, mock_http, monkeypatch, status):
+    from types import SimpleNamespace
+
+    from google.genai import errors
+
+    config = load_routing().model_dump()
+    config["providers"]["local"] = {"adapter": "gemini", "api_key_env": "VMERGER_TEST_KEY"}
+    monkeypatch.setattr("vmerger.providers.load_routing", lambda: RoutingConfig.model_validate(config))
+
+    def fail(**kwargs):
+        raise errors.APIError(status, {"error": {"message": "private diagnostics", "code": status}})
+
+    monkeypatch.setattr(
+        "vmerger.providers.genai.Client",
+        lambda **kw: SimpleNamespace(models=SimpleNamespace(generate_content=fail)),
+    )
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        return httpx.Response(200, json=completion())
+
+    mock_http(handle)
+    router = ProviderRouter({})
+    monkeypatch.setattr(router, "audited", lambda role, purpose, fingerprint, operation, **kw: operation()[0])
+    if status == 401:
+        with pytest.raises(ValueError) as caught:
+            router.call("reviewer", "Review", Review)
+        assert "private" not in str(caught.value)
+        assert not calls
+    else:
+        assert router.call("reviewer", "Review", Review).approved
+        assert calls == ["backup.local"]
+
+
+@pytest.mark.parametrize("invalid", ["analyst", "embedding", "missing", "duplicate", "excess"])
+def test_invalid_fallback_chains_are_rejected(fallback_file, invalid):
+    data = load_routing().model_dump()
+    backup = {"provider": "backup", "model": "backup-reviewer"}
+    if invalid in {"analyst", "embedding"}:
+        data["fallbacks"] = {invalid: [backup]}
+    elif invalid == "missing":
+        data["fallbacks"]["reviewer"] = [{"provider": "missing", "model": "test"}]
+    elif invalid == "duplicate":
+        data["fallbacks"]["reviewer"] = [data["routes"]["reviewer"]]
+    else:
+        data["fallbacks"]["reviewer"] = [backup] * 3
+    with pytest.raises(ValidationError):
+        RoutingConfig.model_validate(data)
+
+
+def test_fallback_status_hides_secrets_and_reports_missing_backup_key(fallback_file, monkeypatch):
+    status = public_status()
+    backup = status["routes"]["reviewer"]["fallbacks"][0]
+    assert backup["provider"] == "backup" and backup["configured"]
+    assert "backup.local" not in json.dumps(status) and "fixture-key" not in json.dumps(status)
+    monkeypatch.setenv("VMERGER_BACKUP_KEY", "")
+    assert not public_status()["routes"]["reviewer"]["fallbacks"][0]["configured"]
+    assert public_status()["planning_available"]  # Primary route remains usable.
+
+
+def test_shipped_hybrid_example_is_valid():
+    import tomllib
+
+    with Path("config/ai.hybrid.example.toml").open("rb") as stream:
+        config = RoutingConfig.model_validate(tomllib.load(stream))
+    assert config.route("director").provider == "cloud"
+    assert [r.provider for r in config.fallbacks["director"]] == ["own_gpu", "vast_gpu"]
+
+
+@pytest.mark.integration
+def test_fallback_preserves_failed_primary_and_successful_backup_audits(project, fallback_file, mock_http):
+    from vmerger.db import connect
+
+    mock_http(
+        lambda request: (
+            httpx.Response(503, text="private diagnostics")
+            if request.url.host == "localhost"
+            else httpx.Response(200, json=completion())
+        )
+    )
+    router = ProviderRouter({"project_id": project["id"], "id": None})
+    assert router.call("reviewer", "Review", Review).approved
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT provider,model,status,error,input_tokens,request_fingerprint FROM ai_calls WHERE project_id=%s ORDER BY created_at",
+            (project["id"],),
+        ).fetchall()
+    assert [(r["provider"], r["model"], r["status"]) for r in rows] == [
+        ("local", "fixture-reviewer", "failed"),
+        ("backup", "backup-reviewer", "succeeded"),
+    ]
+    assert rows[0]["error"] == {"type": "ProviderUnavailable"}
+    assert rows[1]["input_tokens"] == 17 and rows[1]["error"] is None
+    assert rows[0]["request_fingerprint"] != rows[1]["request_fingerprint"]
+    assert "private diagnostics" not in json.dumps(rows)

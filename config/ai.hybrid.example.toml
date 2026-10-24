@@ -1,0 +1,40 @@
+# Example only: replace endpoint/model placeholders before using AI_CONFIG_FILE.
+# This file does not rent GPUs or start inference servers.
+frame_samples = 12
+max_output_tokens = 4096
+
+[providers.cloud]
+adapter = "openai_compatible"
+base_url = "https://your-api.example/v1"
+api_key_env = "CLOUD_AI_KEY"
+
+[providers.own_gpu]
+adapter = "openai_compatible"
+base_url = "http://own-gpu-tunnel:18000/v1"
+api_key_env = "OWN_LLM_KEY"
+token_parameter = "max_tokens"
+
+[providers.vast_gpu]
+adapter = "openai_compatible"
+base_url = "http://vast-tunnel:18000/v1"
+api_key_env = "VAST_LLM_KEY"
+token_parameter = "max_tokens"
+
+[default]
+provider = "cloud"
+model = "your-cloud-chat-model"
+
+[routes.analyst]
+provider = "cloud"
+model = "your-cloud-vision-model"
+
+[routes.embedding]
+provider = "cloud"
+model = "your-768-dimensional-embedding-model"
+
+# Ordered, opt-in routes; primary -> own GPU -> already running Vast GPU.
+[fallbacks]
+director = [{provider = "own_gpu", model = "vmerger-planner"}, {provider = "vast_gpu", model = "vmerger-planner"}]
+music = [{provider = "own_gpu", model = "vmerger-planner"}, {provider = "vast_gpu", model = "vmerger-planner"}]
+editor = [{provider = "own_gpu", model = "vmerger-planner"}, {provider = "vast_gpu", model = "vmerger-planner"}]
+reviewer = [{provider = "own_gpu", model = "vmerger-planner"}, {provider = "vast_gpu", model = "vmerger-planner"}]

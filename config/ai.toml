@@ -1,5 +1,7 @@
 # Provider names are arbitrary. Secrets are referenced by environment variable name.
 # Changes apply to the next job; a running job keeps its configuration snapshot.
+# Self-hosted/Vast endpoints and opt-in fallbacks: ai.hybrid.example.toml.
+# No fallback or GPU provisioning is enabled by this default configuration.
 frame_samples = 12
 max_output_tokens = 12000
 

@@ -101,7 +101,7 @@ def test_provider_adapter_records_success_and_failure_without_network(project, m
         ).fetchall()
         assert [c["status"] for c in calls] == ["succeeded", "failed"]
         assert calls[0]["input_tokens"] == 30
-        assert calls[1]["error"] == {"type": "TimeoutError"}
+        assert calls[1]["error"] == {"type": "ProviderTimeout"}
         jobs.fence(conn, job)
         jobs.succeed(conn, job)
 

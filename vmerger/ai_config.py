@@ -56,6 +56,7 @@ class RoutingConfig(BaseModel):
     providers: dict[str, ProviderConfig]
     default: Route
     routes: dict[Role, Route]
+    fallbacks: dict[Role, list[Route]] = Field(default_factory=dict)
     frame_samples: int = Field(default=12, ge=2, le=24)
     max_output_tokens: int = Field(default=12000, ge=256, le=32000)
 
@@ -66,6 +67,19 @@ class RoutingConfig(BaseModel):
         for route in [self.default, *self.routes.values()]:
             if route.provider not in self.providers:
                 raise ValueError("Route refers to an unknown provider")
+        for role, backups in self.fallbacks.items():
+            if role in {"analyst", "embedding"}:
+                raise ValueError("Fallbacks are supported only for creative roles")
+            if len(backups) > 2:
+                raise ValueError("At most two fallback routes per role are allowed")
+            seen = {(self.route(role).provider, self.route(role).model)}
+            for backup in backups:
+                if backup.provider not in self.providers:
+                    raise ValueError("Fallback refers to an unknown provider")
+                identity = (backup.provider, backup.model)
+                if identity in seen:
+                    raise ValueError("Duplicate fallback route")
+                seen.add(identity)
         return self
 
     def route(self, role: Role) -> Route:
@@ -124,16 +138,23 @@ def public_status():
     try:
         config = load_routing()
         keys = credentials(config)
-        routes = {}
-        for role in ROLES:
-            route = config.route(role)
+
+        def describe(route):
             provider = config.providers[route.provider]
-            routes[role] = {
+            return {
                 "provider": route.provider,
                 "adapter": provider.adapter,
                 "model": route.model,
                 "configured": bool(keys[route.provider])
                 or (provider.adapter == "openai_compatible" and provider.allow_no_key),
+            }
+
+        routes = {}
+        for role in ROLES:
+            route = config.route(role)
+            routes[role] = {
+                **describe(route),
+                "fallbacks": [describe(backup) for backup in config.fallbacks.get(role, [])],
             }
         return {
             "ai_available": all(r["configured"] for r in routes.values()),
