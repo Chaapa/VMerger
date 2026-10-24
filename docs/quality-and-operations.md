@@ -1,295 +1,288 @@
-# VMerger: валидация, мониторинг и тестирование
+# VMerger: validation, monitoring and testing
 
-Дата: 23 октября 2026. Статус: требования к реализации и выпуску; описанные валидаторы, мониторинг и CI ещё не реализованы. Основной документ: [architecture.md](architecture.md). Агентные роли: [agents-and-effects.md](agents-and-effects.md). Фактически выполненные проверки: [validation.md](validation.md).
+Date: October 23, 2026. Status: target implementation and release requirements. The alpha implements part of this design; see [implemented scope](implementation.md) and [measured validation](local-validation.md). Related documents: [architecture](architecture.md), [agents](agents-and-effects.md), [early SQL checks](validation.md).
 
-## 1. Что считаем качеством
+## 1. What quality means
 
-Система должна принимать поддерживаемые материалы, сохранять их, создавать технически корректный фильм по пожеланиям пользователя и объяснять сбой с возможностью продолжить работу. Контроль строится в трёх слоях:
+The system must accept supported material, retain it, produce a technically valid film matching the request, and explain recoverable failures. Quality has three layers:
 
-1. Детерминированные проверки файлов, доступа, плана, версий и результата.
-2. Проверки надёжности API, очередей, хранилища, рендера и провайдеров.
-3. Оценка содержимого: соответствие заданию, история, подбор музыки и уместность монтажа.
+1. Deterministic checks of files, access, plans, versions and output.
+2. Reliability checks for API, queues, storage, rendering and providers.
+3. Content evaluation: instruction compliance, storytelling, music fit and editing choices.
 
-Каждый новый этап получает валидатор, метрики, обработку ошибок и тесты одновременно с реализацией. Обещания агента и успешный ответ провайдера сами по себе не означают готовый результат. Статус ready требует успешно проверенного файла.
+Every new stage receives validators, metrics, error handling and tests alongside implementation. Agent promises and successful API responses do not establish a finished result. Ready status requires a verified file.
 
-## 2. Валидация на границах
+## 2. Boundary validation
 
-| Граница | Проверка | Поведение при нарушении |
+| Boundary | Check | Failure behavior |
 |---|---|---|
-| HTTP / чат | Проверенная идентичность, владелец проекта, схема и размер запроса, request_id и отпечаток параметров | Понятная ошибка; чужие данные и побочные действия недоступны |
-| Загрузка | S3 ListParts, фактический размер и SHA-256, распознавание контейнера/кодеков через ffprobe, лимиты длительности/разрешения/ресурсов | Исходник не становится доступным анализу; повреждённый импорт помечается ошибкой |
-| Декодирование | Чтение потоков, ориентация, временные отметки, переменная частота кадров, HDR/цветовой профиль | Нормализация поддерживаемого случая либо явное описание неподдерживаемого формата |
-| Анализ / векторы | Схема ответа, диапазоны в исходнике, допустимые ID, конечные числа, профиль/размерность/нормализация вектора | Ответ не попадает в каталог; ограниченный повтор или ошибка этапа |
-| Вызов инструмента агентом | Разрешённая операция, схема аргументов, доступ к ресурсам, базовая версия, лимит времени/шагов/стоимости | Запрос отклоняется и учитывается в бюджете; дальнейшие действия используют корректный контекст |
-| План фильма | Реальные клипы и ресурсы, диапазоны, переходы, скорость, музыка, эффекты, поддерживаемые параметры, ограничения пользователя | План не допускается к рендеру; конкретные ошибки возвращаются управляющему процессу |
-| Публикация версии / файла | Активный проект, действующая аренда, актуальная базовая версия, проверенный объект и соответствующий ему отчёт | Устаревшая попытка не публикует результат; текущие данные сохраняются |
-| Превью / экспорт | Метаданные, полное декодирование, ожидаемые дорожки и длительность, временная карта, размеры и доступность S3-объекта | Результат не получает ready; повтор или новая исправленная версия |
-| Удаление / очистка | Действующие загрузки и аренды, ссылки из всех сохраняемых версий, сроки временных URL, политика бэкапов | Ресурс очищается только после снятия зависимостей; незавершённая очистка повторяется |
+| HTTP / chat | Verified identity, ownership, request schema/size, request ID and fingerprint | Explain failure without exposing another project's data or causing side effects |
+| Upload | S3 ListParts, actual size/SHA-256, ffprobe container/codecs, duration/resolution/resource limits | Prevent analysis; mark corrupt import failed |
+| Decode | Streams, orientation, timestamps, VFR, HDR/color profile | Normalize supported input or explicitly identify unsupported format |
+| Analysis / vectors | Response schema, source bounds, allowed IDs, finite values, profile/dimension/normalization | Do not publish into catalog; bounded retry or stage failure |
+| Agent tool | Allowed operation, argument schema, access, base version, time/step/cost limits | Reject and account for the attempt; retain valid context |
+| Film plan | Real clips/resources, ranges, transitions, speed, music, effects, parameters and user constraints | Block rendering and return specific findings to orchestration |
+| Version / file publication | Active project, current lease/base version, verified object and matching report | Reject stale publication and preserve current data |
+| Preview / export | Metadata, full decode, expected tracks/duration, time map, S3 size/availability | No ready status; retry or create a corrected version |
+| Deletion / cleanup | Active uploads/leases, retained-version references, temporary URL expiry and backups | Delete only after dependencies clear; retry incomplete cleanup |
 
-Валидация разделяется на ошибки, блокирующие результат, и предупреждения. Чёрный кадр, тишина или резкая склейка могут быть намеренными; их детектор даёт сигнал с контекстом, а не безусловный запрет. Неизвестный ID исходника, выход за границы, утрата обязательной сцены и доступ к чужому проекту — блокирующие ошибки.
+Distinguish blocking errors from warnings. Black frames, silence and hard cuts may be intentional; detectors provide context-aware signals. Unknown sources, out-of-bounds ranges, lost required scenes and cross-project access are blocking errors.
 
-Исходные медиа декодируются непривилегированным процессом с ограничениями CPU, RAM, времени и scratch-диска. Текст из транскриптов, каталогов эффектов и метаданных рассматривается как данные. Аргументы модели не исполняются как команды или произвольные выражения FFmpeg.
+Decode untrusted media in an unprivileged process with CPU, memory, time and scratch limits. Treat transcripts, effect catalogs and metadata as data. Never execute model arguments as shell commands or arbitrary FFmpeg expressions.
 
-### Проверка монтажного плана
+### Edit-plan checks
 
-Валидатор разрешает ссылки на фактические ресурсы проекта и сверяет:
+Resolve references against actual project resources and verify:
 
-- Диапазоны [start, end), длительности после скорости и перекрытий, временные координаты исходника / вхождения / готового фильма.
-- Порядок и наличие обязательных моментов, исключённые фрагменты, закрепления длительности и команды «монтаж оставь».
-- Совместимость эффекта, его версии и ресурсов со сборкой движка; доступность шрифтов, LUT и оверлеев.
-- Размещение музыки и речевых фрагментов, ограничения громкости и отсутствие обрезания слова по доступным временным отметкам.
-- Наличие требуемых сведений об источнике и использовании импортированных материалов.
-- Воспроизводимость выбранных операций из сохранённого плана без нового обращения к модели.
+- Half-open ranges, speed/overlap-adjusted duration, and source/occurrence/output time coordinates.
+- Required/excluded moments, order, duration pins and “keep the edit” constraints.
+- Effect version/resource compatibility with the engine, including fonts, LUTs and overlays.
+- Music/speech placement, loudness bounds and word-safe boundaries where timestamps permit.
+- Required provenance and usage confirmation for imported resources.
+- Reproduction from the saved plan without another model request.
 
-Распознавание речи может ошибаться; проверка границ по транскрипту не гарантирует естественный обрыв фразы. Такие случаи дополняются анализом фактического звука и оценкой качества.
+ASR can be wrong. Transcript-based boundary checks do not guarantee natural phrase endings; inspect audio and evaluate quality too.
 
-### Проверка готового файла
+### Output-file checks
 
-После рендера выполняются ffprobe и полный проход декодирования; затем проверяются контейнер, ожидаемые дорожки, геометрия, частота кадров, длительность и временные отметки. Допуски задаются профилем рендера с учётом кадров, аудиосэмплов и задержки кодека, а не одним универсальным числом.
+Run ffprobe and a full decode after rendering. Verify container, expected tracks, geometry, frame rate, duration and timestamps. Tolerances belong to the render profile and account for frames, audio samples and codec delay rather than one universal threshold.
 
-В тестах синхронизации используем ролики с известными звуковыми импульсами и визуальными маркерами. На реальном видео временные отметки помогают выявлять технический рассинхрон, но не доказывают правильное совпадение губ и речи. Громкость и перегруз проверяются относительно профиля звука; ожидаемые паузы и затухания учитываются.
+Sync fixtures use known audio impulses and visual markers. On real footage, timestamps detect technical offset but do not establish correct lip sync. Check loudness/clipping against the audio profile, accounting for expected pauses/fades.
 
-Рендер получает fingerprint из версии плана, хешей ресурсов, профиля и сборки движка. Изменившийся эффект, ресурс или валидатор требует новой проверки. Если эффект нужно заменить после ошибки, сохраняется новая версия; содержание уже зафиксированной версии не меняется.
+Render fingerprints include plan version, resource hashes, profile and engine build. Changed effects, resources or validators require new verification. Replacing a failed effect creates a new version; committed versions are immutable.
 
-### Отчёт проверки
+### Validation report
 
-Общий контракт результата: stage, validator_version, target_id, input_fingerprint, output_sha256 при наличии файла, status (passed / warnings / failed), findings с code/severity/location, время и длительность проверки.
+The common report has stage, validator version, target ID, input fingerprint, optional output SHA-256, status (`passed`, `warnings`, `failed`), findings with code/severity/location, timestamp and duration.
 
-На старте компактный отчёт хранится в jobs.checkpoint и метаданных соответствующего результата; подробный отчёт при необходимости — отдельным объектом S3. Финальная фиксация отчёта и статуса выполняется одной транзакцией после проверки аренды. Проверяющая публикацию операция сопоставляет fingerprint и SHA-256 с точным объектом. При нескольких форматах рендера отчёты адресуются по render_id и fingerprint и не перетираются.
+Initially store compact reports in job checkpoints and result metadata; detailed reports can use S3. Final report/status publication is atomic and lease-checked. Publication matches fingerprint/hash to the exact object. Multiple output formats use render ID/fingerprint so reports cannot overwrite one another.
 
-Очистка истории заданий сохраняет отчёты, необходимые живым версиям. Если потребуется самостоятельный поиск и длительное хранение всех проверок, добавляется validation_runs с project_id и ссылками на результат; отдельная таблица не нужна для первого прототипа. Текущая SQL-схема не обеспечивает эти прикладные правила автоматически.
+Job-history cleanup preserves reports needed by live versions. If independent query/retention is required, add `validation_runs` with project/result references. SQL alone does not enforce these application rules.
 
-## 3. Ошибки, повторы и восстановление
+## 3. Errors, retries and recovery
 
-Ошибки имеют устойчивый код, например unsupported_media, invalid_plan, provider_rate_limit, storage_unavailable, render_failed, budget_exceeded, stale_version. Пользователь получает понятное описание и текущий статус; технический журнал содержит идентификаторы для диагностики.
+Stable codes include unsupported_media, invalid_plan, provider_rate_limit, storage_unavailable, render_failed, budget_exceeded and stale_version. Users get a clear explanation/current status; diagnostic logs retain correlation IDs.
 
-- Временные ошибки сети, S3 и провайдера повторяются с ограничением числа попыток, задержкой с разбросом и учётом Retry-After.
-- Ошибка данных или доступа не запускает бесконечный повтор. Исправление плана считается творческой попыткой и расходует общий бюджет.
-- При массовом отказе зависимости ограничиваем новые обращения и периодически проверяем восстановление. Очередь сохраняется в PostgreSQL.
-- До запуска AI-вызова резервируем часть общего бюджета задания; после ответа сверяем фактический расход. При неопределённой стоимости консервативная оценка остаётся зарезервированной до сверки, а не обнуляется.
-- Истечение аренды, отмена и удаление проекта запрещают публикацию. Внешние запросы могут завершиться после отмены, но их результат не изменяет состояние проекта.
-- После сбоя продолжаем с проверенного checkpoint. Предыдущие готовые версии остаются доступны; интерфейс отличает выполняемую новую версию от последней готовой.
+- Retry transient network, storage and provider failures with bounded attempts, jittered delays and Retry-After support.
+- Data/access errors do not retry forever. Plan repair is a creative attempt consuming the shared budget.
+- During widespread dependency failure, limit new calls and probe recovery while retaining queued work.
+- Reserve AI spend before a call and reconcile actual usage afterward. Unknown costs retain a conservative reservation until reconciled.
+- Lease expiry, cancellation and project deletion prohibit publication. Late external responses cannot mutate project state.
+- Resume from verified checkpoints and preserve previous ready versions. Distinguish a new in-progress version from the latest ready result.
 
-## 4. Наблюдаемость и размещение
+These are target behaviors. The implemented creative-role fallback is explicitly configured and described in [providers](providers.md); it does not provide a shared circuit breaker or monetary budget controller.
 
-| Компонент | Роль | Когда вводим |
+## 4. Observability and deployment
+
+| Component | Role | Introduction |
 |---|---|---|
-| Структурированные JSON-логи | События, ошибки и корреляция запросов/заданий | С первого рабочего этапа |
-| OpenTelemetry SDK | Трассы API → очередь → worker → модель/S3/рендер | С первых интеграций |
-| Prometheus | Метрики приложения, PostgreSQL, хоста и хранилища | Первый серверный стенд |
-| Grafana | Дашборды состояния, производительности и стоимости | Первый серверный стенд |
-| Alertmanager | Группировка, подавление повторов и маршрутизация алертов | Первый постоянно работающий стенд |
-| OpenTelemetry Collector + Tempo | Приём и поиск распределённых трасс | При нескольких worker-хостах; раньше при необходимости диагностики |
-| Loki | Централизованный поиск логов | При нескольких хостах или неудобстве локального поиска |
+| Structured JSON logs | Events, errors, request/job correlation | First working stage |
+| OpenTelemetry SDK | API → queue → worker → model/S3/render traces | Early integrations |
+| Prometheus | Application, PostgreSQL, host and storage metrics | First server environment |
+| Grafana | Health, performance and cost dashboards | First server environment |
+| Alertmanager | Grouping, deduplication and routing | First continuously operated environment |
+| Collector + Tempo | Receive/query distributed traces | Multiple worker hosts, or earlier for diagnosis |
+| Loki | Central log search | Multiple hosts or inconvenient local search |
 
-На одном сервере достаточно ограниченных по объёму JSON-логов, Prometheus, Grafana и Alertmanager; трассы можно исследовать в среде разработки. Дополнительные хранилища телеметрии включаются отдельным профилем развёртывания. Их отказ не останавливает монтаж: экспорт асинхронный, очереди ограничены, потеря телеметрии измеряется.
+One server can start with size-bounded JSON logs, Prometheus, Grafana and Alertmanager, with traces inspected during development. Additional telemetry storage uses a deployment profile. Export is asynchronous and buffered with limits; monitoring failure must not stop editing, and dropped telemetry must be measured.
 
-Метрики имеют собственное хранилище Prometheus. Логи и трассы не складываются в прикладные таблицы PostgreSQL; в них остаются бизнес-состояние, ai_calls и агентный журнал. Начальный срок хранения метрик — 30 дней, логов — 14 дней, трасс — 7 дней с отдельными лимитами диска. Это настраиваемые значения; исчерпание объёма телеметрии не должно заполнять диск PostgreSQL или scratch.
+Prometheus stores metrics. Do not put raw logs/traces into application PostgreSQL tables, which retain business state, ai_calls and agent audit. Initial configurable retention targets: metrics 30 days, logs 14 days, traces 7 days, with separate disk limits. Telemetry must not fill the database/scratch disk. [OpenTelemetry signals](https://opentelemetry.io/docs/concepts/signals/).
 
-OpenTelemetry предоставляет модель трасс, метрик и логов; конкретный backend их хранения выбирается отдельно. [OpenTelemetry](https://opentelemetry.io/docs/concepts/signals/).
+### Correlation and access
 
-### Корреляция и доступ
+Private logs/traces contain request/project/job IDs, attempt, optional story/version IDs, role, tool, error code and trace ID. Serialize trace context into jobs; each stage/retry gets a linked span rather than one hours-long project span. Record prompt version, model, parameters and input fingerprints without recording full prompts/transcripts/video by default.
 
-Логи и трассы содержат request_id, project_id, job_id, attempt, story_id/version_id при наличии, role, tool, error_code и trace_id. Эти поля используются для диагностики в закрытом административном доступе.
+Exclude API keys, cookies, tokens, signed URLs and media bodies. Sanitize provider errors. Debug-content capture is explicitly enabled for test data with limited retention. Business audit remains complete even when traces are sampled.
 
-Контекст трассировки передаётся через сериализуемый контекст задания; каждый этап и повтор получает собственный span со связью с исходным запуском. Один открытый span на многочасовой проект не требуется. В trace записываются версия промпта, модель, параметры и отпечатки входа, но по умолчанию не пользовательские видео, полные промпты и транскрипты.
+Metric labels exclude user/project/job IDs, filenames and arbitrary text. Bound them to queue, stage, role, configured model alias, error code and route template. [Prometheus instrumentation guidance](https://prometheus.io/docs/practices/instrumentation/).
 
-API-ключи, cookie, токены, подписанные URL и тела медиа не попадают в логи. Текст ошибок провайдера очищается перед записью. Отладочный захват содержимого отдельно включается для тестовых данных с ограниченным сроком хранения. Журнал бизнес-операций остаётся полным даже при выборочном сборе трасс.
-
-Идентификаторы пользователя, проекта, задания, имена файлов и произвольные тексты не используются как labels метрик. Labels ограничены очередью, этапом, ролью, настроенным именем модели, кодом ошибки и шаблоном маршрута. Это удерживает число временных рядов в разумных пределах. [Рекомендации Prometheus](https://prometheus.io/docs/practices/instrumentation/).
-
-### Основные метрики
-
-| Область | Что измеряем |
+| Area | Measurements |
 |---|---|
-| API | Число запросов, 5xx, p50/p95/p99 задержки по шаблону маршрута, активные запросы и SSE, ожидание соединения БД |
-| Очереди | Число ожидающих/активных задач, возраст старейшей готовой к запуску, время ожидания, повторы, просроченные аренды, отмены |
-| Worker | Heartbeat, занятость слотов, прогресс этапа, время последнего прогресса, перезапуски, отказ публикации по старой аренде |
-| AI и агенты | Задержки, 429/5xx/таймауты, ошибки схем, число шагов/исправлений, пределы бюджета, токены и оценка стоимости |
-| Рендер | Время подготовки/рендера/валидации отдельно, секунды рендера на секунду результата, ошибки декодирования, загрузка CPU/GPU |
-| PostgreSQL / поиск | Соединения, блокировки, долгие транзакции, размер БД, задержка запросов, recall в контрольных прогонах |
-| NAS / S3 | Ошибки и задержки чтения/записи, свободное место, незавершённые multipart, объекты без ссылок, скорость передачи |
-| Результат для пользователя | Время до первого готового превью, итоговый успех задания, экспорт, число правок и возвратов версии |
-| Обслуживание | Возраст успешного бэкапа и восстановления, сверка S3/БД, доставка алертов, доступность самого мониторинга |
+| API | Request/5xx counts, route p50/p95/p99, active requests/SSE, DB connection wait |
+| Queues | Pending/active counts, oldest runnable age, wait, retries, expired leases, cancellations |
+| Workers | Heartbeat, slot use, stage progress, last progress, restarts, stale-publication rejection |
+| AI / agents | Latency, 429/5xx/timeouts, schema failures, steps/repairs, budget limits, tokens/cost |
+| Rendering | Preparation/render/validation time, render seconds per output second, decode errors, CPU/GPU |
+| PostgreSQL / search | Connections, locks, long transactions, size, query latency, evaluated recall |
+| NAS / S3 | Read/write errors/latency, free space, incomplete multipart, orphans, throughput |
+| User outcome | Time to first valid preview, final job success, export, edits and version returns |
+| Maintenance | Backup/restore age, S3/DB reconciliation, alert delivery, monitoring availability |
 
-Бизнес-успех считаем по уникальному заданию, а расходы и повторы — по попыткам. Метрики очереди берёт выделенный exporter из БД с ограниченными запросами и периодом 15–30 секунд, чтобы несколько API не дублировали один backlog. Ошибка/устаревание exporter имеет собственный сигнал; последнее значение не выдаётся за актуальное.
+Count business success per unique job, spending/retries per attempt. A dedicated bounded DB exporter samples queues every 15–30 seconds so multiple APIs do not duplicate backlog. Exporter failure/staleness has its own signal; old values must not look current.
 
-Длительность этапа и ожидание в очереди разделяются. Неизвестная стоимость хранится как неизвестная; отдельно измеряется доля вызовов без расчёта. Само по себе число пользовательских правок не считается ошибкой качества: это может быть смена пожеланий.
+Separate stage duration from queue wait. Unknown cost stays unknown, with missing-cost coverage reported. User edit counts alone are not quality failures: users can change their preferences.
 
-### Дашборды и health endpoints
+### Dashboards and health
 
-Первый набор: «Состояние системы», «Очереди и worker», «AI и стоимость», «Рендер и качество», «PostgreSQL и NAS». Из закрытой страницы задания можно перейти к версии, журналу агента, отчёту проверки и трассе.
+Initial dashboards: System health, Queues and workers, AI and cost, Rendering and quality, PostgreSQL and NAS. Private job pages link to versions, agent audit, reports and traces.
 
-- /livez сообщает о работоспособности процесса и не зависит от доступности внешнего AI.
-- /readyz API проверяет готовность обслуживать запросы, подключение к PostgreSQL и совместимость схемы.
-- Доступность NAS, AI и рендер-ресурсов показывается по возможностям; отказ AI не закрывает просмотр состояния проекта.
-- Worker сообщает heartbeat и готовность конкретных очередей. Health-запрос не запускает реальный платный AI-вызов.
-- /metrics и административные страницы доступны только мониторингу/оператору в закрытой сети или через аутентификацию.
+- `/livez` checks process liveness without depending on external AI.
+- API `/readyz` checks request readiness, PostgreSQL and schema compatibility.
+- Report NAS, AI and render-resource availability by capability; AI outages must not block state viewing.
+- Workers report heartbeat and queue-specific readiness. Health checks never make a paid AI call.
+- Restrict `/metrics` and administrative pages to authenticated operators/monitoring or a private network.
 
-## 5. Цели сервиса и алерты
+## 5. Service objectives and alerts
 
-Числа ниже — исходные проектные цели, не результаты измерений и не обещание доступности одного NAS. После первого стенда фиксируем аппаратный профиль, набор входов и допустимый параллелизм. SLO проверяется только в заявленных пределах; при их превышении приём нагрузки ограничивается.
+These are initial design targets, not measured guarantees for one NAS. Record hardware, input profile and supported concurrency after the first deployment. SLOs apply within those limits; throttle excessive load.
 
-| Показатель | Начальная цель и способ измерения |
+| Measure | Initial target / method |
 |---|---|
-| Доступность API | 99,5% за скользящие 30 дней по независимой проверке пользовательского сценария чтения; объявленное обслуживание учитывается отдельно и не исчезает из отчёта |
-| Задержка API | p95 ≤ 500 мс для обычных запросов метаданных; без передачи медиа, длительности SSE и выполнения AI |
-| Начало задания | p95 ожидания готовой задачи: io ≤ 30 с, ai ≤ 120 с, render ≤ 300 с при заявленной нагрузке |
-| Успех обработки | ≥ 99% принятых поддерживаемых проектов в пределах установленного для профиля срока; отказы провайдера и системы входят в неуспех |
-| Поиск | Для ANN стартовая цель recall@10 ≥ 0,95 относительно точного поиска на том же наборе допустимых кандидатов |
-| Целостность | Ни одной публикации чужих, непроверенных или отменённых данных; нарушение блокирует выпуск |
-| Резервирование | Начальный ориентир RPO ≤ 24 ч и RTO ≤ 4 ч; подтверждается восстановлением всего проекта на измеренном объёме |
+| API availability | 99.5% over rolling 30 days via independent user-read checks; report planned maintenance separately |
+| API latency | p95 ≤500 ms for metadata requests, excluding media transfer, SSE lifetime and AI execution |
+| Job start | Runnable-job p95 wait: io ≤30 s, ai ≤120 s, render ≤300 s at stated load |
+| Processing success | ≥99% of accepted supported projects before a profile-specific deadline, including provider/system failures |
+| Search | Initial ANN recall@10 ≥0.95 versus exact search over identical eligible candidates |
+| Integrity | Zero publication of unauthorized, unverified or cancelled data; violations block release |
+| Backups | Initial RPO ≤24 h, RTO ≤4 h, confirmed by full-project restoration at measured size |
 
-Для успеха обработки считаем завершённые к сроку проекты из когорты принятых запусков. Зависшие задания после срока считаются неуспешными, даже если не получили failed. Явные отмены пользователем и отклонённые до приёма форматы показываются отдельно. Сроки для профилей размера/длительности устанавливаются по стендовым измерениям до выпуска.
+Success uses the cohort of accepted runs completed by deadline. Stuck jobs past deadline fail even without failed status. Explicit user cancellation and pre-acceptance unsupported formats are reported separately. Establish size/duration-profile deadlines from measurements before release.
 
-Для рендера дополнительно фиксируем производительность относительно длительности результата, разрешения, эффектов и оборудования. Универсальный срок обработки любого видео не задаём. Для малых выборок показываем количество событий; проценты и перцентили не трактуем как надёжную оценку.
+Render throughput is conditional on output duration, resolution, effects and hardware; there is no universal deadline for arbitrary footage. Small samples display event counts and uncertainty rather than confident percentages/percentiles.
 
-| Алерт | Начальное условие | Реакция оператора |
+| Alert | Initial condition | Operator response |
 |---|---|---|
-| API / БД недоступны | Три неудачные проверки подряд с интервалом 30 с | Проверить сервис, БД и сеть; сохранить диагностику до перезапуска |
-| Очередь без исполнителей | Есть готовая работа, отсутствуют здоровые worker нужной очереди > 2 мин | Восстановить worker/зависимость, проверить просроченные аренды |
-| Задание не продвигается | Этап превысил свой предельный срок либо нет ожидаемого прогресса | Проверить FFmpeg/AI/S3, отменить текущую попытку через штатный механизм |
-| NAS / scratch заполняется | Свободно < 15% — предупреждение; < 5% — критично; учитывается прогноз роста | Ограничить новые задачи и проверить безопасную очистку/расширение |
-| Массовые ошибки AI | > 10% ошибок на ≥ 20 вызовах за 10 мин либо повторные отказы малого контрольного потока | Проверить квоту и провайдера, ограничить обращения; не переключать модель незаметно |
-| Расход | 80% заданного бюджета — предупреждение, 100% — остановка новых платных операций | Проверить повторы и выбранный профиль; завершить доступный корректный результат |
-| Рендеры не проходят проверку | ≥ 3 неуспешных результата за 15 мин | Сравнить сборки/пресеты, отключить проблемную версию, сохранить пример |
-| Бэкап просрочен | Нет успешной копии > 26 ч при ежедневной политике | Проверить хранилище бэкапов и выполнить копию; проверить восстановимость |
-| Мониторинг молчит | Независимый наблюдатель не получает heartbeat > 5 мин | Проверить сам сервер и канал доставки |
+| API / database unavailable | Three consecutive failed checks, 30 s apart | Inspect service/DB/network and preserve diagnostics before restart |
+| Queue without workers | Runnable work and no healthy eligible worker for >2 min | Restore worker/dependency; inspect expired leases |
+| No job progress | Stage deadline exceeded or expected progress absent | Inspect FFmpeg/AI/S3; cancel attempt through normal controls |
+| NAS / scratch filling | <15% free warning, <5% critical, considering growth | Limit new work and verify safe cleanup/expansion |
+| AI failure surge | >10% errors across ≥20 calls in 10 min, or repeated control-probe failures | Check quota/provider, limit calls; use only explicit fallback routes |
+| Spending | 80% budget warning, 100% stops new paid work | Inspect retries/profile; finalize a valid available result |
+| Invalid renders | ≥3 failed results in 15 min | Compare builds/presets, disable affected version, retain a sample |
+| Overdue backup | No successful copy for >26 h under daily policy | Inspect destination, back up and verify recoverability |
+| Silent monitoring | Independent observer misses heartbeat for >5 min | Check server and delivery path |
 
-Условия имеют выдержку, группировку по причине и сообщение о восстановлении. Ошибки всех worker при одном отказе NAS объединяются. Канал уведомлений и ответственный оператор задаются при развёртывании; без проверенной доставки алертов стенд не считается обслуживаемым.
+Use hold times, cause grouping and recovery notifications. Group many worker errors caused by one NAS outage. Define a notification channel and responsible operator during deployment; an environment without tested delivery is not fully operated.
 
-Heartbeat для контроля мониторинга отправляется на другой хост/NAS либо независимый сервис: монитор на том же упавшем сервере не может сообщить о своей недоступности. Это проектное требование; никакие уведомления или расписания в рамках изменения документа не создаются.
+An independent monitoring heartbeat runs on another host/NAS/service: a failed server cannot report its own outage. These requirements do not create actual schedules or notifications.
 
-## 6. Уровни тестирования
+## 6. Test layers
 
-| Уровень | Инструменты | Что проверяем |
+| Layer | Tools | Scope |
 |---|---|---|
-| Модульные | pytest, Vitest | Валидация плана, расчёт времени, операции чата, бюджет, состояние интерфейса |
-| Проверки свойств | Hypothesis | Диапазоны, скорость и перекрытия, повтор операций, последовательности смены состояний |
-| Интеграционные | pytest + настоящий PostgreSQL/pgvector, SeaweedFS, FFmpeg в изолированном стенде | Транзакции, конкуренция, S3, миграции, публикация, восстановление |
-| Контрактные | Подменяемые ответы адаптеров и ограниченный прогон реального API | Схемы Gemini/каталогов, ошибки, истечение файлов, лимиты, совместимость |
-| Сквозные | Playwright с реальным backend и хранилищем | Загрузка → фильм → правка → версия → экспорт, воспроизведение и отмена |
-| Медиа-регрессии | FFmpeg/ffprobe и контрольные кадры/аудиомаркеры | Переходы, звук, скорость, титры, цвет и соответствие превью экспорту |
-| Нагрузочные | k6 и генератор заданий | HTTP/SSE, число пользователей, очередь, fair scheduling, ресурсы и NAS |
-| Сбои и восстановление | Управляемое завершение процессов, обрывы сети, лимиты диска | Повторы, аренды, отказ зависимостей, восстановление бэкапов |
-| Качество AI | Версионируемый набор проектов и пожеланий + человеческая оценка | Соответствие запросу, сценарий, музыка, эффекты, стоимость и время |
-| Мониторинг | promtool и проверка цепочки доставки | Срабатывание/затихание алертов, отсутствие данных, группировка и доставка |
+| Unit | pytest, Vitest | Plan validation, time calculations, chat operations, budget, UI state |
+| Property | Hypothesis | Ranges, speed/overlap, repeated operations, state transitions |
+| Integration | Real PostgreSQL/pgvector, SeaweedFS, FFmpeg | Transactions, concurrency, S3, migrations, publication, recovery |
+| Contract | Adapter fixtures plus bounded real API runs | Provider/catalog schemas, errors, file expiry, limits, compatibility |
+| End-to-end | Playwright with backend/storage | Upload → film → edit → version → export, playback/cancellation |
+| Media regression | FFmpeg/ffprobe, frames/audio markers | Transitions, audio, speed, titles, color, preview/export agreement |
+| Load | k6 and job generator | HTTP/SSE, users, queue, fairness, resources, NAS |
+| Fault/recovery | Controlled process termination, network/disk limits | Retries, leases, dependencies, backup restoration |
+| AI quality | Versioned projects/briefs and human ratings | Compliance, script, music, effects, cost, time |
+| Monitoring | promtool and delivery checks | Firing/resolution, missing data, grouping and delivery |
 
-Подмена AI делает обычные тесты воспроизводимыми; она не заменяет реальную оценку модели. Интеграционные проверки S3 используют именно выбранную версию SeaweedFS, а не только имитацию S3. Конкуренция проверяется несколькими соединениями и отдельными worker-процессами; барьеры синхронизации управляют моментом гонки вместо случайных sleep.
+AI fixtures make routine tests reproducible but do not evaluate real model quality. S3 integrations use the selected SeaweedFS version, not just an emulator. Exercise races with independent connections/processes and synchronization barriers rather than random sleeps.
 
-Hypothesis генерирует входы для заданных свойств, включая граничные случаи. Playwright проверяет видимое пользователю поведение. k6 может завершать прогон ошибкой при нарушении порогов, а promtool проверяет правила алертов на заданных временных рядах. [Hypothesis](https://hypothesis.readthedocs.io/en/latest/), [Playwright](https://playwright.dev/docs/best-practices), [k6](https://grafana.com/docs/k6/latest/using-k6/thresholds/), [promtool](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/).
+[Hypothesis](https://hypothesis.readthedocs.io/en/latest/) generates property cases, [Playwright](https://playwright.dev/docs/best-practices) checks visible behavior, [k6 thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/) gate load runs, and [promtool](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) tests alert time series.
 
-### Обязательные сценарии
+### Required scenarios
 
-Каждый пункт получает постоянный test ID и проверку наблюдаемого результата:
+Each scenario needs a permanent test ID and observable assertion:
 
-1. Повтор запроса возвращает прежний результат; тот же ID с другим содержимым отклоняется.
-2. Два worker не публикуют два результата одного задания; старый lease_token после перехвата отклоняется.
-3. Две команды к одной версии разрешаются без потери правки и без незаметной перезаписи.
-4. Падение после S3 PUT, но до SQL commit, исправляется сверкой; повтор не создаёт вторую текущую версию.
-5. Отмена и удаление во время загрузки, AI и рендера запрещают позднюю публикацию.
-6. Сервис проверяет владельца во всех маршрутах, инструментах, поиске, SSE и выдаче ссылок.
-7. Multipart восстанавливается после разрыва, неверный хеш отклоняется, истёкшая ссылка обновляется с повторной проверкой доступа.
-8. Отказ NAS/БД, заполнение scratch и недоступный провайдер дают ограниченные повторы и сохраняют состояние.
-9. Очередь продолжает работу после перезапуска, а перегруженный проект не блокирует остальных.
-10. План с отсутствующим ресурсом, неизвестным эффектом или неправильным диапазоном не доходит до рендера.
-11. «Оставь целиком», «убери этот момент» и «музыку поменяй, монтаж оставь» соблюдаются в итоговом плане и медиа.
-12. Переключение и восстановление версий, обновление страницы и SSE reconnect показывают фактическое состояние.
-13. Генерируемые FFmpeg-команды не позволяют выполнить текст из названия файла, титра, промпта или ответа модели.
-14. Невалидный JSON, отказ модели, неизвестный tool, prompt injection в материале, бесконечные шаги и исчерпание бюджета обрабатываются управляемо.
-15. Удаление временных файлов не затрагивает ресурсы любой сохраняемой версии и другого проекта.
-16. Восстановленный из независимой копии проект открывает исходники, версии и экспорт; проверяются хеши.
+1. An identical request returns its existing result; changed content with the same ID conflicts.
+2. Two workers cannot publish duplicate job results; a superseded lease token is rejected.
+3. Concurrent edits to one version preserve edits without silent overwrites.
+4. A crash after S3 PUT but before SQL commit is reconciled; retry creates no second current version.
+5. Cancellation/deletion during upload, AI or rendering prevents late publication.
+6. Ownership is enforced across routes, tools, search, SSE and signed links.
+7. Multipart resumes after interruption; wrong hashes fail; renewed URLs recheck access.
+8. NAS/DB outages, full scratch and provider unavailability preserve state with bounded retries.
+9. Queues survive restarts; an overloaded project cannot starve others.
+10. Missing resources, unknown effects and invalid ranges never reach rendering.
+11. “Keep this whole,” “remove this moment,” and “change music, keep the edit” hold in plan and media.
+12. Version switching/restoration, page refresh and SSE reconnect show actual state.
+13. Filenames, titles, prompts and model output cannot inject executable FFmpeg/shell text.
+14. Invalid JSON, refusals, unknown tools, input prompt injection, endless steps and budget exhaustion are bounded.
+15. Temporary-file cleanup preserves retained-version and other-project resources.
+16. Independent backup restoration recovers source/version/export playback and matching hashes.
 
-## 7. Покрытие кода и тестовые материалы
+## 7. Coverage and fixtures
 
-Начальные пороги для выпуска после появления реализации:
-
-| Область | Строки | Ветви |
+| Area | Lines | Branches |
 |---|---:|---:|
-| Backend целиком | ≥ 80% | ≥ 75% |
-| Критическая логика: доступ, публикация, аренды, версии, план, бюджет | ≥ 90% | ≥ 90% |
-| Frontend целиком | ≥ 80% | ≥ 70% |
-| Новая/изменённая бизнес-логика | ≥ 90% | ≥ 80%; для критической области ≥ 90% |
+| Backend overall | ≥80% | ≥75% |
+| Critical access/publication/leases/versions/plans/budget | ≥90% | ≥90% |
+| Frontend overall | ≥80% | ≥70% |
+| New/changed business logic | ≥90% | ≥80%; critical code ≥90% |
 
-Backend измеряется pytest-cov/coverage.py, frontend — Vitest coverage. Отчёты хранят строки и ветви раздельно; объединённое число не заменяет оба порога. Покрытие worker и API в отдельных процессах собирается и объединяется, чтобы фоновые пути не выпадали из отчёта. Включаем также ни разу не импортированные файлы приложения. Генерируемый код и внешние зависимости исключаются явно; доменные ошибки и адаптеры не исключаются ради процента.
+These are target release floors. Measure backend with pytest-cov/coverage.py and frontend with Vitest coverage. Keep line and branch results separate. Merge coverage across worker/API subprocesses and include application files never imported. Explicitly exclude generated code/dependencies, not domain errors/adapters to improve the number.
 
-Для критических инвариантов обязательны успешный, ошибочный и конкурирующий сценарии, где применимо, даже если процент уже достигнут. Выборочные mutation-проверки валидаторов и публикации помогают обнаружить тесты без полезных утверждений. Снимки JSON и проверки внутренних вызовов не заменяют проверку результата. Покрытие кода не измеряет художественное качество.
+Critical invariants need success, failure and concurrency cases where relevant regardless of percentage. Selected mutation tests expose weak assertions. JSON snapshots/internal-call checks do not replace outcome checks. Coverage is not artistic quality.
 
-Малые синтетические ролики генерируются воспроизводимо: цветовые поля, счётчики кадров, звук с известными маркерами, речь, отсутствие звука, вертикальная ориентация, VFR, повреждённые/обрезанные файлы. Реальные разрешённые материалы хранятся в отдельном закрытом S3-наборе; manifest с ID, хешами, ожидаемыми свойствами и условиями использования версионируется в репозитории. Производственные пользовательские видео в CI не копируются.
+Generate reproducible small fixtures with color fields, frame counters, known audio markers, speech, silence, portrait orientation, VFR and corrupt/truncated files. Store permitted real material in a private S3 evaluation set, with versioned manifests containing IDs, hashes, expected properties and usage terms. Do not copy production user footage into CI.
 
-Контрольные кадры и звук сравниваются с допусками. Побитовая идентичность MP4 разных кодировщиков не является общим критерием. Изменение эталонов проходит содержательный просмотр. Нестабильный тест получает причину, владельца и срок исправления; повторный прогон не скрывает первое падение, критические тесты нельзя исключить из допуска к выпуску.
+Frame/audio comparisons use tolerances; MP4 byte identity across encoders is not universal. Review golden changes substantively. Flaky tests get a cause, owner and repair deadline; reruns retain initial failures, and critical tests cannot be removed from release gates.
 
-## 8. Оценка агентов и поиска
+## 8. Agent and search evaluation
 
-Конкретные определения, числители/знаменатели, источники, пороги, разметка и панели графиков описаны в [Метриках качества агентов и дашборде](agent-evaluation.md). Этот документ задаёт контракт evaluator; произвольный «общий AI-балл» не используется.
+[Agent evaluation](agent-evaluation.md) defines formulas, numerators/denominators, sources, targets, labels and charts. Arbitrary “AI scores” are not substitutes for defined measurements.
 
-Основные показатели по ролям: режиссёр — взвешенное покрытие значимых событий и непрошенные повторы; музыкальный агент — человеческое одобрение, сохранность речи и происхождение ресурсов; монтажный агент — дефектные стыки на 100 проверенных, обрыв речи и соблюдение правок; рецензент — precision/recall и ложные тревоги. Общие метрики — успех до deadline, валидность первого плана, критические нарушения, p95 времени, стоимость с повторами и полнота измерений.
+Director metrics cover weighted events and repetition; music metrics cover human fit, speech and provenance; editor metrics cover defective boundaries, speech truncation and constraints; reviewer metrics cover precision/recall and false alarms. Common measures include deadline success, first-plan validity, critical violations, p95 time, all-attempt cost and evaluation coverage.
 
-Дашборд сравнивает одинаковые версии контрольного набора и показывает N проектов/случаев/повторов, числители и знаменатели, 95% интервалы и разницу с baseline. Связанные случаи и повторы группируются по исходному проекту при bootstrap; missing и not_applicable не считаются успехом. Метрики человека, кода и LLM-оценщика подписаны раздельно. Для результатов evaluator планируются eval_runs/eval_results в PostgreSQL и read-only представления Grafana; исходные видео и доказательства — в S3.
+Compare identical suite versions and show projects/cases/trials, counts, intervals and baseline differences. Bootstrap by source project, keeping related cases/trials together. Missing/not-applicable are not successes. Keep code/human/LLM series separate. The full evaluator stores runs/results in PostgreSQL and evidence in S3, with read-only Grafana aggregate views.
 
-Начинаем с набора 20–30 небольших проектов разных типов и минимум трёх типов правок на проект; это стартовый объём, который расширяется найденными ошибками. Есть разработческая часть и отдельная контрольная часть, на которой не подбирают промпты. Для каждой версии промпта, модели, инструментов, пресетов или поиска сравниваем новый вариант с принятым baseline на одинаковых входах.
+The initial exploratory set is 20–30 varied projects with at least three edit types; the more specific evaluation contract targets 30 independent projects. Separate development and holdout sets, and compare changes to models/prompts/tools/presets/search on identical inputs.
 
-| Критерий | Как оцениваем |
+| Criterion | Evaluation |
 |---|---|
-| Техническая допустимость | Все опубликованные кандидаты проходят детерминированные проверки; ошибочные предложения считаются отдельно |
-| Соблюдение жёстких требований | Ноль нарушений обязательных/исключённых сцен, доступа и команды сохранения монтажа на контрольном наборе |
-| Сценарий и подбор | Покрытие значимых событий, повторы, соответствие пожеланию; слепое попарное сравнение людьми |
-| Музыка и эффекты | Уместность, читаемость речи/титров, отсутствие лишних эффектов, подтверждённые ресурсы |
-| Поиск | ANN recall относительно exact отдельно от семантической релевантности по человеческой разметке |
-| Экономичность | Стоимость проекта и минуты исходников, число вызовов/проб, время до результата, доля исчерпания бюджета |
+| Technical validity | Published candidates pass deterministic checks; invalid proposals remain counted |
+| Hard constraints | Zero violations of required/excluded scenes, access and preserved edits |
+| Story/selection | Event coverage, repetition, instruction match and blind human comparison |
+| Music/effects | Fit, speech/title readability, excessive effects and confirmed resources |
+| Search | ANN recall versus exact, separately from human semantic relevance |
+| Efficiency | Cost per project/input minute, calls/trials, readiness and budget exhaustion |
 
-Для запросов с менее чем 10 подходящими кандидатами recall@10 использует фактическое число доступных эталонных результатов. Фильтры проекта/владельца/профиля одинаковы у exact и ANN; отдельно тестируются сильно ограничивающие фильтры. Высокий ANN recall не доказывает, что эмбеддинги находят нужный человеку момент.
+With fewer than ten eligible neighbors, recall@10 uses the actual reference count. Exact/ANN use identical owner/project/profile filters, including restrictive filters. High ANN recall does not establish semantic relevance.
 
-Рецензент помогает находить проблемы, но его оценка не является единственным допуском к выпуску. При изменении творческой логики контрольный прогон повторяется, например три раза на случай, чтобы увидеть разброс. Фиксируем ID модели, промпта, параметры, версии инструментов, исходники и расходы. При обновлении модели оцениваем фактическую доступность и дрейф ответов.
+Reviewers assist but are not sole release judges. Repeat creative cases, initially three trials, to measure variability. Record model/prompt IDs, settings, tool versions, inputs and spend; check model availability and response drift after updates.
 
-Блокируют выпуск: любое нарушение жёсткого правила, новая воспроизводимая техническая регрессия, превышение заданного бюджета, ухудшение принятых показателей поиска. Для творческого качества требуется отсутствие подтверждённого ухудшения в слепом сравнении; при малом числе оценок результат помечается неопределённым и выборка расширяется. Начальный порог расследования — рост стоимости или времени > 20% на одинаковом стенде; увеличение возможно только как осознанное изменение профиля продукта.
+Block release for hard violations, reproducible technical regressions, budget overruns or worse accepted retrieval metrics. Creative comparison requires no confirmed regression; small uncertain samples need expansion. Investigate >20% time/cost growth on identical hardware; intentional increases require an explicit product-profile decision.
 
-## 9. CI и допуск к выпуску
+## 9. CI and release gates
 
-| Когда | Обязательные проверки |
+| Trigger | Required checks |
 |---|---|
-| Каждый PR | Формат/линт/типы, модульные и property-тесты, покрытие, критические интеграции PostgreSQL/S3, короткий реальный рендер, минимальный Playwright-сценарий с подменой AI, проверка миграций и правил мониторинга |
-| Изменение промпта/модели/пресета | Дополнительно соответствующий контрольный AI/медиа-набор и сравнение с baseline |
-| Регулярный расширенный прогон | Большой медиа-набор, гонки, отказ процессов/сети, рост очереди, длительный прогон, ограниченный реальный AI smoke |
-| Кандидат на выпуск | Полная матрица, нагрузка на эталонном стенде, восстановление бэкапа, доставка алерта, миграция с предыдущей версии и проверка отката приложения |
-| После развёртывания | Небольшой синтетический проект, воспроизведение/скачивание, проверка метрик, очередей и ошибок |
+| Every PR | Formatting/lint/types, unit/property tests, coverage, critical PG/S3 integrations, short actual render, minimal Playwright with AI fixtures, migrations and monitoring rules |
+| Prompt/model/preset change | Relevant AI/media control suite and baseline comparison |
+| Extended recurring run | Larger media set, races, process/network faults, queue growth, soak run, bounded live AI smoke |
+| Release candidate | Full matrix, reference-host load, restoration, alert delivery, migration from previous version and application rollback |
+| After deployment | Small synthetic project, playback/download, metrics, queues and errors |
 
-Это требования к будущему CI; расписания и платные вызовы сейчас не настроены. PR из недоверенного источника не получает секреты провайдера. Реальные AI-прогоны выполняются в доверенной среде с отдельным бюджетом и разрешёнными тестовыми данными. Версии БД, расширения, SeaweedFS, FFmpeg и зависимостей закрепляются; сканируются зависимости, контейнеры и случайно попавшие секреты.
+This is the complete target CI contract. The alpha's shipped workflow is a subset; no paid evaluations or recurring schedules are created by this document. Untrusted PRs receive no provider secrets. Live evaluations run in trusted environments with separate budgets and approved data. Pin database/extensions/SeaweedFS/FFmpeg/dependencies and scan dependencies, images and accidental secrets.
 
-Артефакты CI: JUnit, раздельные отчёты покрытия строк/ветвей, отчёт оценки AI, версии окружения, отчёт нагрузки и восстановления. Для падения сохраняются очищенные логи, Playwright trace и небольшой тестовый медиафрагмент с ограниченным сроком хранения.
+Artifacts include JUnit, separate line/branch coverage, AI evaluation, environment versions, load and restore reports. Retain sanitized failure logs, Playwright traces and small test excerpts with bounded retention.
 
-Миграции проверяются на пустой БД и копии данных предыдущей версии. Изменения вводятся совместимыми шагами; откат приложения не должен требовать разрушительного отката данных. Уменьшение пропускной способности, потеря старых планов и невозможность отрендерить сохранённую версию блокируют выпуск.
+Test migrations on empty databases and previous-version data copies. Use compatible rollout steps; application rollback must not require destructive data rollback. Lost plans, inability to render old versions and unexplained throughput loss block release.
 
-Каждый дефект, влияющий на данные, доступ или готовый результат, получает воспроизводящий тест. Каждый новый эффект получает тест параметров, границ, совместимости и реального рендера. У каждого оповещения есть оператор, действия по диагностике и проверка восстановления.
+Data/access/output defects receive reproducing tests. New effects require parameter, boundary, compatibility and actual-render tests. Alerts need an owner, diagnostic steps and recovery checks.
 
-## 10. Эксплуатационные проверки
+## 10. Operational checks
 
-- Регулярная сверка S3/БД ищет незавершённые загрузки, неопубликованные объекты и отсутствующие ресурсы; удаление следует действующей политике хранения.
-- Ежедневная резервная копия PostgreSQL и постоянных медиа хранится вне основного отказного домена. Для согласованного восстановления фиксируются снимок/точка восстановления БД и manifest неизменяемых S3-объектов; сборщик мусора учитывает сохранённые копии.
-- Ежемесячное учебное восстановление и восстановление перед существенным изменением хранилища измеряют фактические RPO/RTO. Отчёт хранит объём, длительность, хеши и результат воспроизведения.
-- На сбое оператор сначала сохраняет диагностику, затем восстанавливает зависимость или штатно перезапускает попытку. Ручное присвоение ready и удаление «зависших» строк SQL не являются способом восстановления.
-- Ограничения нагрузки защищают БД, NAS и бюджет: предел активных проектов/вызовов/рендеров, общий лимитер провайдера и проверка доступного scratch перед запуском.
-- Рост числа серверов сопровождается проверкой общих лимитов, пулов БД, справедливости очередей и наблюдаемости; дополнительные worker не отменяют предел пропускной способности NAS.
+- Reconcile S3/database state for incomplete uploads, unpublished objects and missing resources under the retention policy.
+- Store daily PostgreSQL/media backups outside the primary failure domain. Record a DB snapshot/recovery point and immutable-object manifest; garbage collection respects retained backups.
+- Practice restoration monthly and before major storage changes. Record measured RPO/RTO, size, time, hashes and playback results.
+- Preserve diagnostics before restoring dependencies or restarting an attempt through supported controls. Manually setting ready or deleting stuck SQL rows is not recovery.
+- Protect DB/NAS/budgets with active-project/call/render limits, a shared provider limiter and preflight scratch checks.
+- Adding hosts requires rechecking global limits, connection pools, fairness and observability; workers do not remove NAS throughput limits.
 
-## 11. Порядок реализации и фактический статус
+## 11. Implementation sequence and current status
 
-1. С первым API/worker: контракты ошибок, валидаторы границ, JSON-логи, идентификаторы корреляции, метрики и минимальные тесты.
-2. С загрузкой/очередью: настоящие интеграции PostgreSQL/SeaweedFS, тесты гонок/идемпотентности, дашборды, алерты и проверка доставки.
-3. С первым рендером: контрольные медиа, проверка результата до ready, проверка времени/звука/ресурсов и воспроизведения.
-4. С агентами: журнал инструментов, бюджет, контрольный набор, тесты неверных ответов и ограниченный цикл доработки.
-5. До выпуска: пороги покрытия, сквозные проверки, нагрузка, восстановление, миграции и подтверждённые эксплуатационные пределы.
+1. First API/worker: error contracts, boundary validators, JSON logs, correlation IDs, metrics and minimal tests.
+2. Upload/queue: real PG/SeaweedFS integrations, race/idempotency tests, dashboards, alerts and delivery.
+3. First render: control media, validation before ready, timing/audio/resource checks and playback.
+4. Agents: tool audit, budgets, evaluation suite, invalid-output tests and bounded revisions.
+5. Release: coverage gates, end-to-end tests, load, restoration, migrations and demonstrated operating limits.
 
-Сейчас существуют архитектурные документы и SQL-схема. Ранее пройдены 31 условие на PGlite в одном соединении; это проверка схемы и SQL-запросов, не реализованный набор тестов всего приложения. Текущее покрытие приложения не измерено и не заявляется. SQL-проверки предстоит перенести в воспроизводимый набор репозитория и дополнить многопроцессными интеграциями. Изменение этого документа не является запуском CI, мониторинга или проверок на NAS.
+The original 31-condition single-connection PGlite experiment checked schema/SQL only. The alpha now has real service integrations and measured coverage in [local validation](local-validation.md). The broader targets above, including full evaluator, tracing, alert delivery and restore/load objectives, must not be presented as completed merely because routine CI passes.
 
-## Источники
+## References
 
-- [OpenTelemetry: сигналы наблюдаемости](https://opentelemetry.io/docs/concepts/signals/)
-- [Prometheus: инструментирование и labels](https://prometheus.io/docs/practices/instrumentation/)
-- [Prometheus и Alertmanager: оповещения](https://prometheus.io/docs/alerting/latest/overview/)
-- [Prometheus: тестирование правил](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/)
-- [pytest: организация тестового окружения](https://www.pytest.org/en/latest/explanation/fixtures.html)
-- [Hypothesis: проверки свойств](https://hypothesis.readthedocs.io/en/latest/)
-- [Vitest: покрытие](https://vitest.dev/guide/coverage)
-- [Playwright: сквозные проверки](https://playwright.dev/docs/best-practices)
-- [Grafana k6: критерии успешного нагрузочного прогона](https://grafana.com/docs/k6/latest/using-k6/thresholds/)
-
+- [OpenTelemetry signals](https://opentelemetry.io/docs/concepts/signals/)
+- [Prometheus instrumentation](https://prometheus.io/docs/practices/instrumentation/)
+- [Alerting and Alertmanager](https://prometheus.io/docs/alerting/latest/overview/)
+- [Prometheus rule tests](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/)
+- [pytest fixtures](https://www.pytest.org/en/latest/explanation/fixtures.html)
+- [Hypothesis](https://hypothesis.readthedocs.io/en/latest/)
+- [Vitest coverage](https://vitest.dev/guide/coverage)
+- [Playwright best practices](https://playwright.dev/docs/best-practices)
+- [k6 thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/)

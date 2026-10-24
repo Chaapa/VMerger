@@ -1,73 +1,73 @@
-# VMerger: агенты и монтажные эффекты
+# VMerger: agents and editing effects
 
-Дата: 23 октября 2026. Статус: согласованное направление архитектуры; агенты, каталог и инструменты ещё не реализованы. Основной документ: [architecture.md](architecture.md).
+Date: October 23, 2026. Status: target architecture. The alpha implements a bounded, single-pass role workflow; the broader catalog, tools and preview-review loop below remain future work. See [architecture](architecture.md) and [implemented scope](implementation.md).
 
-## 1. Роли и управление
+## 1. Roles and orchestration
 
-Пользователь загружает материалы и пишет пожелания в единственный чат проекта или истории. Режиссёр определяет историю; музыкальный агент и монтажный агент предлагают звук и оформление; рецензент оценивает превью. Промежуточное утверждение каждого творческого решения не требуется.
+Users upload material and give instructions in one project/story chat. A director defines the story, music and editing agents propose sound and treatment, and a reviewer assesses the preview. Users need not approve each intermediate creative decision.
 
-| Роль | Ответственность | Результат |
+| Role | Responsibility | Output |
 |---|---|---|
-| Режиссёр / сценарист | Структура фильма, реальные сцены, обязательные моменты и требования пользователя | Сценарий со ссылками на исходники и план последовательности |
-| Музыкальный агент | Поиск, анализ и выбор доступной музыки, предложение размещения | Трек, происхождение, условия использования, музыкальные акценты |
-| Монтажный агент | Ритм, границы склеек, переходы, скорость, кадрирование, титры, цвет, оверлеи и звуковые акценты | Предложение изменений к конкретной версии плана |
-| Рецензент | Соответствие запросу, цельность, повторы и заметные проблемы в фактическом превью | Замечания с таймкодами и приоритетом |
+| Director / scriptwriter | Structure, actual scenes, required moments and user requirements | Script with source references and sequence plan |
+| Music agent | Search, analyze and select available music; propose placement | Track, provenance, usage terms and musical accents |
+| Editing agent | Pace, cut boundaries, transitions, speed, crop, titles, color, overlays and sound accents | Change proposal against a specific plan version |
+| Reviewer | Request compliance, coherence, repetition and visible preview problems | Prioritized timestamped findings |
 
-Роли — настройки модели, контекста и доступных инструментов в одной кодовой базе. В alpha каждая роль выбирает провайдера и модель через `config/ai.toml`; Gemini и OpenAI-совместимый адаптер возвращают структурированный JSON. Управляющий код выполняет операции, проверяет права и фиксирует результат. Агентам не нужен прямой доступ к SQL или оболочке. Function calling и расширяемый каталог инструментов относятся к целевому развитию, а не к уже реализованному проходу ролей. См. [настройку провайдеров](providers.md).
+Roles are model/context/tool configurations in one codebase. In the alpha, each role chooses its provider/model through `config/ai.toml`; Gemini and compatible adapters return structured JSON. Orchestration executes operations, checks access and commits results. Agents do not need direct SQL or shell access. Function calling and extensible tools are target features beyond the current role pass. See [provider configuration](providers.md).
 
-Режиссёр отвечает за творческое решение; отдельный управляющий процесс отвечает за состояние задания, общий бюджет, отмену, повтор и публикацию версии. Специалисты работают со снимком base_version_id. Их предложения объединяются и валидируются перед единственной операцией публикации с существующими lease_token и проверкой текущей версии. Устаревшее предложение пересчитывается относительно новой версии.
+The director owns creative choices; orchestration owns job state, shared budget, cancellation, retries and publication. Specialists work against a `base_version_id` snapshot. Merge and validate proposals before a single publication operation checks the current version and lease token. Recompute stale proposals against the new version.
 
-~~~mermaid
+```mermaid
 flowchart TD
-    U["Видео и пожелания"] --> C["Каталог сцен и речи"]
-    C --> D["Режиссёр: сценарий и подбор сцен"]
-    D --> M["Музыкальный агент"]
-    D --> E["Монтажный агент: общий стиль"]
-    M --> B["Анализ ритма и акцентов музыки"]
-    E --> F["Монтажный агент: точные склейки и эффекты"]
+    U["Footage and brief"] --> C["Scene and speech catalog"]
+    C --> D["Director: script and scene selection"]
+    D --> M["Music agent"]
+    D --> E["Editing agent: overall style"]
+    M --> B["Music beat and accent analysis"]
+    E --> F["Editing agent: precise cuts and effects"]
     B --> F
-    F --> V["Валидация и сохранение версии"]
-    V --> R["Рендер превью"]
-    R --> Q["Техническая проверка и рецензент"]
-    Q --> O["Готовая история"]
-    Q -->|"До 2 циклов доработки"| D
-~~~
+    F --> V["Validate and save version"]
+    V --> R["Render preview"]
+    R --> Q["Technical checks and reviewer"]
+    Q --> O["Completed story"]
+    Q -->|"At most 2 revision cycles"| D
+```
 
-Независимый поиск музыки и стилистических вариантов может идти параллельно. Точные склейки под ритм вычисляются после выбора музыкального фрагмента. Речь и требования сохранить сцену целиком имеют приоритет над попаданием в удар.
+Independent music/style searches may run in parallel. Precise beat-aware cuts follow music selection. Speech and “keep this whole” requirements take priority over beat alignment.
 
-## 2. Монтажный агент
+## 2. Editing agent
 
-Получает сценарий, снимок плана, выбранную музыку, карту речи, характеристики исходников, пожелания и список возможностей рендера. По необходимости просматривает конкретные фрагменты и короткие пробы эффектов. Решения должны опираться на фактический материал.
+Inputs are script, plan snapshot, selected music, speech map, source properties, user instructions and renderer capabilities. Inspect specific excerpts and short effect trials when needed; decisions must use actual footage.
 
-| Задача | Пример | Стартовый объём |
+| Task | Example | Initial scope |
 |---|---|---|
-| Ритм | Укоротить серию похожих кадров, поддержать музыкальный акцент | Склейки и длительности с проверкой речи |
-| Переходы | Обычная склейка, мягкое растворение, уход в затемнение | Небольшой набор проверенных пресетов |
-| Движение | Плавное приближение и кадрирование | Ограничения на кроп и сохранение важной области |
-| Скорость | Ускорить длинную дорогу | Постоянная скорость участка; плавные изменения скорости позднее |
-| Цвет | Согласовать соседние кадры, сделать картинку теплее | Коррекция и проверенные LUT с учётом цветового пространства |
-| Текст | Название истории, место, короткая подпись | Типографические шаблоны с безопасными полями и проверкой шрифтов |
-| Оверлеи и звук | Лёгкое зерно, мягкий звуковой акцент | Поддерживаемые медиа и ограниченная интенсивность |
+| Pacing | Shorten similar shots or support an accent | Cuts/durations with speech checks |
+| Transitions | Cut, dissolve, fade | Small set of verified presets |
+| Movement | Gentle zoom and crop | Crop bounds and important-region preservation |
+| Speed | Accelerate a long road sequence | Constant speed per section; ramps later |
+| Color | Match neighboring shots or warm the image | Corrections and verified LUTs with color-space checks |
+| Text | Story title, place, short caption | Typography templates, safe areas and font checks |
+| Overlays / sound | Subtle grain or sound accent | Supported media and bounded intensity |
 
-Для стартового каталога достаточно примерно 15–25 пресетов; число является ориентиром разработки. Естественный стиль по умолчанию допускает обычные склейки и отсутствие декоративных эффектов. Запрос «динамичнее» может менять темп без добавления переходов на каждом стыке. Стабилизация, сложный трекинг и генеративные эффекты — отдельные возможности после проверки качества и стоимости.
+A target starter catalog of roughly 15–25 presets is a development guideline, not shipped inventory. Natural style permits plain cuts and no decorative effects. “More dynamic” may change pace without adding a transition to every cut. Stabilization, complex tracking and generative effects require separate quality/cost validation.
 
-## 3. Поиск эффектов и внешних материалов
+## 3. Finding effects and external resources
 
-Сначала агент ищет в собственном каталоге по задаче, стилю, категории и возможностям движка. Для небольшого каталога достаточно тегов и текстового поиска; отдельный векторный индекс для эффектов не нужен. При росте каталога можно добавить отдельный профиль эмбеддингов в PostgreSQL, не смешивая его с видеоиндексом.
+Search the internal catalog by purpose, style, category and engine capabilities first. Tags and text search suffice for a small catalog. If needed later, add a separate embedding profile in PostgreSQL without mixing effect and video indexes.
 
-Пресет описывает: effect_id, неизменяемую версию, назначение, теги, схему и пределы параметров, допустимые форматы/цветовые пространства, стоимость рендера, необходимые ресурсы, поддерживаемые версии движка и демонстрационное превью.
+A preset includes effect ID, immutable version, purpose, tags, parameter schema/bounds, compatible formats/color spaces, rendering cost, dependencies, supported engine versions and preview.
 
-На старте определения встроенных пресетов поставляются как версионируемые декларативные манифесты вместе с backend. Пользовательские наборы пресетов при появлении редактора каталога получат отдельную таблицу PostgreSQL. Медиа и превью постоянно хранятся в S3 на NAS.
+Built-in presets ship as versioned declarative backend manifests. User-defined sets can receive a PostgreSQL table when a catalog editor exists. Media/previews persist in NAS-backed S3.
 
-Внешний поиск подключается через адаптеры выбранных каталогов. Адаптер возвращает ID источника, тип ресурса, сведения о лицензии, совместимость и возможность импорта. Автоматический импорт доступен для разрешённых материалов в пределах заданного бюджета. Поиск произвольного шаблона в интернете не означает, что движок способен его применить: требующий другого редактора шаблон исключается из доступных кандидатов до появления адаптера.
+External search uses adapters for selected catalogs. Results include source ID, resource type, license information, compatibility and import support. Approved resources can import within budget. Finding an arbitrary editing template online does not make it executable: exclude templates requiring another editor until an adapter exists.
 
-Импортёр получает ресурс по идентификатору доверенного каталога, проверяет формат, размер, содержимое и SHA-256, сохраняет его в закрытый S3 и фиксирует источник, условия использования и подтверждение лицензии. Музыка, звуки, изображения и видео используют существующие assets. LUT и прочие вспомогательные ресурсы учитываются через storage_objects и типизированные ссылки плана; прикладной валидатор проверяет формат, доступ и наличие. Агент не устанавливает скачанные плагины и не исполняет найденный код. Описания каталогов считаются данными, а не командами.
+The importer fetches a trusted-catalog resource by ID, verifies format, size, content and SHA-256, stores it in private S3 and records source, usage terms and license confirmation. Music, sounds, images and video use `assets`. LUTs and other dependencies use `storage_objects` and typed plan references. Validators check format, access and availability. Agents do not install downloaded plugins or execute discovered code. Catalog descriptions are data, not instructions.
 
-## 4. Инструменты
+## 4. Tools
 
-Проект и права привязаны к контексту задания на backend. Модель передаёт идентификаторы доступных ей сущностей. Пример интерфейсов:
+The backend binds project and permissions to the job context. Models supply IDs of entities available in that context. Example target interfaces:
 
-~~~text
+```text
 search_effects(query, category, capabilities) -> presets
 get_effect(effect_id, version) -> manifest
 inspect_clip(asset_id, source_interval_us) -> observations
@@ -76,51 +76,51 @@ import_resource(provider, resource_id) -> verified_resource
 preview_effect(base_version_id, proposal, interval_us) -> preview_job_id
 get_preview_result(preview_job_id) -> status_and_media_reference
 submit_edit_proposal(base_version_id, operations) -> validated_proposal
-~~~
+```
 
-Проба эффекта имеет отдельный хеш входа, бюджет, срок хранения и идемпотентный ключ. Долгий рендер выполняет render worker; ожидание сохраняется в checkpoint и не занимает AI-слот. Повтор инструмента после сбоя возвращает прежнее задание, если вход совпадает. Импорт файлов также идемпотентен; запись результата защищена действующей арендой.
+Effect trials have an input hash, budget, retention and idempotency key. Render workers handle long trials; waiting is checkpointed and releases the AI slot. Retrying a tool with identical input returns its previous job. Imports are also idempotent, and result publication requires the current lease.
 
-Модель выбирает разрешённый пресет и его параметры. Компилятор плана сам строит FFmpeg filtergraph; текст модели не подставляется в shell или произвольное выражение фильтра. Перед xfade компилятор нормализует совместимость потоков; поддержка каждого пресета проверяется на закреплённой сборке FFmpeg. Более сложная графика позже может получить отдельный адаптер рендера за тем же контрактом.
+The model selects an allowed preset and parameters. The plan compiler builds the FFmpeg filtergraph; model text is never inserted into shell commands or arbitrary filter expressions. Normalize stream compatibility before xfade and test presets on a pinned FFmpeg build. More complex graphics may later use another renderer behind the same contract.
 
-## 5. План и хранение
+## 5. Plans and storage
 
-Канонический результат сохраняется в edit_versions.plan новой версии контракта. Помимо сценария, клипов и музыки, план содержит экземпляры эффектов с устойчивыми ID, версией и снимком определения пресета, хешем, проверенными параметрами и временной привязкой. Ресурсы представлены внутренними ID и хешами, без временных подписанных URL. Профиль рендера фиксирует сборку движка и необходимые зависимости.
+Canonical results live in a new version of the `edit_versions.plan` contract. Beyond script, clips and music, plans include stable effect-instance IDs, preset version/snapshot/hash, validated parameters and time bindings. Resources use internal IDs and hashes, not temporary URLs. The render profile pins engine build and dependencies.
 
-Временная привязка явно различает исходник, время внутри вхождения клипа после изменения скорости и время готового фильма. Для перехода указываются соседние clip_id и длительность перекрытия. Компилятор вычисляет итоговые позиции и длительность с учётом скорости и перекрытий, проверяет границы и обновляет карту времени для чата. Координаты кадрирования и титров задаются относительно кадра, чтобы уменьшенное превью и экспорт сохраняли композицию.
+Time bindings distinguish source time, time inside a clip occurrence after speed changes, and final-film time. Transitions identify neighboring clip IDs and overlap duration. The compiler computes positions/duration, validates bounds and updates chat's time map. Crop/title coordinates are frame-relative so proxies and exports preserve composition.
 
-Результаты анализа ритма и выбор трека имеют версии. Зависимые от музыки склейки и эффекты помечаются этой зависимостью: при замене музыки пересчитываются именно они. Если пользователь просит сохранить монтаж, границы клипов фиксируются, а музыка и звуковые акценты адаптируются к ним.
+Beat analysis and track selection are versioned. Music-dependent cuts/effects declare their dependency so replacing music recomputes only affected decisions. “Keep the edit” fixes clip boundaries and adapts music/accents around them.
 
-| Данные | Хранение |
+| Data | Storage |
 |---|---|
-| Выполняемый этап, кандидатные планы, бюджет | jobs.checkpoint |
-| Полный зафиксированный сценарий и монтаж | edit_versions.plan и constraints |
-| Медиа и вспомогательные ресурсы | assets / storage_objects, байты в S3 |
-| Превью и экспорт полной версии | renders |
-| Временные пробы эффектов | Проверенные storage_objects, ссылки в checkpoint, ограниченный срок хранения |
-| Вызовы модели и стоимость | ai_calls |
-| Журнал шагов и инструментов | Планируемая agent_steps: job_id, номер шага, роль, tool_call_id, отпечаток входа, ссылки на результаты, статус и время |
+| Active stage, candidate plans, budget | jobs.checkpoint |
+| Committed script and edit | edit_versions.plan and constraints |
+| Media and dependencies | assets / storage_objects, bytes in S3 |
+| Full-version previews/exports | renders |
+| Temporary effect trials | Verified storage_objects, checkpoint references and bounded retention |
+| Model calls and usage | ai_calls |
+| Step/tool audit | Planned agent_steps: job ID, step number, role, tool-call ID, input fingerprint, result references, status and time |
 
-Одна строка agent_steps описывает операцию и её фактический результат; внутренние рассуждения модели не храним. События принадлежат проекту и заданию. Подробные крупные результаты при необходимости выносятся в S3. Таблица потребует отдельной миграции при реализации; текущий schema.sql остаётся базовой схемой из 16 таблиц.
+An agent step records an operation and observed result, not hidden model reasoning. Events belong to a project/job; large detail can live in S3. agent_steps needs its own migration; the initial schema is the 16-table baseline.
 
-Очистка учитывает все ссылки из сохранённых версий: выбранный трек, оверлей, LUT, шрифт и необходимые определения пресетов сохраняются, пока нужны версии. Импортированные ресурсы неизменяемы. Рендер старой версии не выполняет новый поиск или повторный творческий выбор. Воспроизводимость решений обеспечивается снимками; побитовая идентичность на разных аппаратных кодировщиках не обещается.
+Cleanup follows every saved-version dependency: selected tracks, overlays, LUTs, fonts and preset definitions remain while referenced. Imported resources are immutable. Rendering an old version performs no new search or creative selection. Snapshots reproduce decisions; different hardware encoders are not promised bit-identical bytes.
 
-## 6. Проверка, ограничения и пользовательские правки
+## 6. Verification, limits and user edits
 
-Для каждой роли задаются измеримые критерии и графики сравнения версий: [метрики агентов](agent-evaluation.md). Рецензент отдельно проверяется на фильмах с известными дефектами и чистых контролях; его собственные оценки не являются эталоном для других агентов.
+Each role has measurable criteria and version-comparison charts in [agent evaluation](agent-evaluation.md). Test the reviewer against known defects and clean controls; its own ratings are not ground truth for other roles.
 
-Перед публикацией код проверяет принадлежность ресурсов, диапазоны, совместимость пресетов, доступность зависимостей, длительность, поддерживаемые параметры и ограничения пользователя. После рендера проверяет воспроизведение, дорожки, длительность и технические ошибки. Рецензент оценивает фактическое превью и фрагменты вокруг склеек; итоговое качество оценивается также на тестовых пользовательских проектах. Полный контракт проверок, метрик и тестов описан в [quality-and-operations.md](quality-and-operations.md).
+Before publication, code checks resource ownership, ranges, preset compatibility, dependencies, duration, supported parameters and user constraints. After rendering, check playback, tracks, duration and technical errors. The target reviewer inspects the actual preview and cut neighborhoods. User-project evaluations also assess final quality. The complete checks are in [quality and operations](quality-and-operations.md).
 
-У задания общий предел стоимости, времени, числа вызовов и проб эффектов; дочерняя роль получает часть того же бюджета. Перед платной операцией резервируется её расход, после завершения он сверяется; неопределённый расход не превращается в ноль. Допускается максимум два цикла творческой доработки. При исчерпании бюджета сохраняется лучшая версия, прошедшая технические проверки и соблюдающая все жёсткие требования. Невыполненные мягкие пожелания сообщаются явно. Если такой версии нет, новая работа завершается ошибкой с доступным checkpoint, а предыдущая готовая версия сохраняется. Отмена и потеря аренды запрещают публикацию всеми дочерними операциями.
+Jobs share limits for money, time, calls and effect trials; each child role receives part of the same budget. Reserve cost before a paid operation and reconcile afterward; unknown spend does not become zero. Allow at most two creative revision cycles. On exhaustion, retain the best technically valid version satisfying all hard rules and report unmet soft wishes. If none exists, fail with an accessible checkpoint and preserve the previous ready version. Cancellation or lease loss prevents all child publication.
 
-Каждый этап и вызов инструмента имеет контекст request/job/attempt/trace; журнал фиксирует фактические операции и результаты. Метрики включают время, число шагов, ошибки схем и инструментов, исправления, стоимость и исчерпание бюджета. Секреты, подписанные URL и содержание пользовательских медиа в телеметрию не попадают. Для каждого эффекта обязательны тесты параметров и реального рендера; для агентов — контрольные проекты, неверные ответы, prompt injection в материалах, потеря аренды, отмена и повтор вызова инструмента. Изменения модели/промпта/пресета сравниваются с принятой базовой версией на отдельном контрольном наборе.
+Every stage/tool carries request/job/attempt/trace context. Audit actual operations and results. Measure duration, steps, schema/tool failures, corrections, cost and exhausted budgets. Keep secrets, signed URLs and user-media contents out of telemetry. Effects need parameter and actual-render tests. Agents need control projects, invalid answers, media prompt-injection cases, lease loss, cancellation and retried tool calls. Compare changed models/prompts/presets with an accepted baseline on a separate holdout.
 
-Роли запускаются по необходимости. «Убери приближения» затрагивает монтажный план и рендер. «Поменяй музыку, монтаж оставь» фиксирует клипы и запускает музыкальную часть. «Сделай отдельный фильм про поход» возвращает работу режиссёру. Полный повтор анализа исходников при таких правках не требуется.
+Run only needed roles. “Remove the zooms” changes the edit plan and render. “Change the music, keep the edit” fixes clips and reruns music work. “Make a separate hiking film” returns to the director. These edits do not require reanalyzing all sources.
 
-Интерфейс сохраняет дизайн «Истории»: один чат, проигрыватель и версии. Прогресс отражает реальные этапы: «Собираю историю», «Подбираю музыку», «Подбираю оформление», «Проверяю результат». После завершения достаточно краткого описания изменений, например: «Ускорил дорогу, добавил название поездки, сохранил разговоры и сделал мягкий финал».
+The Stories interface keeps one chat, player and version history. Progress reflects real stages: “Planning the story,” “Selecting music,” “Designing the edit,” “Checking the result.” Afterward, provide a short change description, such as “Sped up the road sequence, added the trip title, preserved conversations and softened the ending.”
 
-## Источники
+## References
 
-- [Gemini: function calling](https://ai.google.dev/gemini-api/docs/function-calling)
-- [FFmpeg: фильтры, переходы и обработка медиа](https://www.ffmpeg.org/ffmpeg-filters.html)
-- [FFmpeg: требования к входам xfade](https://ffmpeg.org/pipermail/ffmpeg-cvslog/2021-April/127243.html)
-- [Anthropic: разделение агентных решений и заданных процессов](https://www.anthropic.com/research/building-effective-agents)
+- [Gemini function calling](https://ai.google.dev/gemini-api/docs/function-calling)
+- [FFmpeg filters and media processing](https://www.ffmpeg.org/ffmpeg-filters.html)
+- [FFmpeg xfade input requirements](https://ffmpeg.org/pipermail/ffmpeg-cvslog/2021-April/127243.html)
+- [Anthropic: agents and workflows](https://www.anthropic.com/research/building-effective-agents)

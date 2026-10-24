@@ -1,115 +1,113 @@
-# VMerger: архитектура с возможностью масштабирования
+# VMerger: architecture designed to scale
 
-Дата: 23 октября 2026. Статус: целевая архитектура; рабочая alpha реализует её ограниченный срез. См. [реализованный объём](implementation.md) и [фактическую локальную проверку](local-validation.md).
+Date: October 23, 2026; updated for provider routing and failover. Status: target architecture. The working alpha implements a limited subset; see [implemented scope](implementation.md) and [measured local validation](local-validation.md).
 
-Основная БД: PostgreSQL + pgvector. Одна кодовая база с отдельными модулями; API и worker запускаются независимыми процессами и могут работать на разных хостах. На старте достаточно одного API и одного worker.
+The primary database is PostgreSQL with pgvector. One modular codebase serves independent API and worker processes, which can run on different hosts. One API and one worker are enough initially.
 
-Принятое размещение: собственный сервер / NAS. Постоянные медиа хранятся в закрытом объектном хранилище SeaweedFS с S3 API. Компьютер пользователя нужен для загрузки и просмотра; после завершения загрузки обработка продолжается на сервере.
+Deployment is on the owner's server or NAS. Persistent media lives in private SeaweedFS object storage through its S3 API. The user's computer handles uploads and playback; processing continues on the server after an upload finishes.
 
-Подробные приложения: [агенты и монтажные эффекты](agents-and-effects.md), [валидация, мониторинг и тестирование](quality-and-operations.md), [метрики качества агентов и графики](agent-evaluation.md). Фактически выполненные проверки отдельно перечислены в [validation.md](validation.md); проектные требования не являются результатами тестов.
+Supporting documents cover [agents and editing effects](agents-and-effects.md), [validation, monitoring and testing](quality-and-operations.md), and [agent metrics and charts](agent-evaluation.md). [Early SQL validation](validation.md) records a separate experiment. Design requirements are not test results.
 
-## 1. Зафиксированный продукт и дизайн
+## 1. Product and interface
 
-Используем выбранный дизайн «Истории»: спокойные зелёные акценты, большие обложки, светлая и тёмная темы. Пользователь загружает видео, получает автоматически собранные истории, смотрит их и задаёт правки в чате. Монтажные решения принимает система.
+The selected **Stories** design uses calm green accents, large covers, and light and dark themes. Users upload footage, receive assembled stories, watch them, and request changes in chat. The system makes editing decisions.
 
-Три состояния интерфейса:
+The interface has three states:
 
-1. **Новый проект.** Загрузка файлов/папки и необязательное поле «Что это за видео и какой результат нужен?». Нужны только исходники: формат, число фильмов и длительность система может выбрать сама.
-2. **Истории проекта.** Карточки с обложкой, названием, длительностью, кратким содержанием и фактическим статусом обработки. Общий чат управляет проектом: «Объедини море и горы», «Сделай отдельный фильм про поход».
-3. **Просмотр истории.** Слева переключение историй, в центре проигрыватель, справа чат выбранной истории. Под проигрывателем — версии, сравнение версий и скачивание. На мобильном экране чат располагается под видео.
+1. **New project.** Upload files or a folder, with an optional brief describing the footage and desired result. Sources are sufficient: the system can propose format, number of films and duration.
+2. **Project stories.** Cards show a cover, title, duration, summary and actual processing status. Project chat handles requests such as “Combine the beach and mountain footage” or “Make a separate hiking film.”
+3. **Story viewer.** Story navigation, a central player and a story-specific chat. Versions, comparison and download sit below the player. On mobile, chat sits below the video.
 
-Перемещение клипов, таймлайн и ручная нарезка в пользовательский интерфейс не входят. Кнопки подсказок отправляют обычный текстовый запрос. Просмотр предыдущей версии сам по себе не делает её текущей; восстановление — отдельная команда.
+There is no manual timeline, clip dragging or trimming UI. Suggestion buttons submit ordinary text requests. Viewing an earlier version does not make it current; restoration is a separate command.
 
 ```mermaid
 flowchart LR
-    A["Загрузка + пожелание"] --> B["Автоматический анализ и сборка"]
-    B --> C["Карточки историй"]
-    C --> D["Проигрыватель + чат"]
-    D --> E["Новая версия фильма"]
+    A["Upload + brief"] --> B["Automatic analysis and editing"]
+    B --> C["Story cards"]
+    C --> D["Player + chat"]
+    D --> E["New film version"]
     E --> D
-    D --> F["Скачать"]
+    D --> F["Download"]
 ```
 
-## 2. Стек, доступ и размещение
+## 2. Stack, access and deployment
 
-| Компонент | Выбор | Ответственность |
+| Component | Choice | Responsibility |
 |---|---|---|
-| Интерфейс | React, TypeScript, Vite | Проекты, истории, чат, проигрыватель |
-| API | Python, FastAPI, Pydantic | Аутентификация, команды, чтение состояния |
-| Данные | PostgreSQL 18, SQLAlchemy, Alembic | Владельцы, проекты, версии, очередь |
-| Поиск | pgvector >= 0.8.0, PostgreSQL FTS | Векторный и текстовый поиск внутри БД |
-| Медиа | SeaweedFS с S3 API, boto3 | Приватные объекты на своём NAS/сервере |
-| Обработка | Python worker, очереди io/ai/render | Загрузки, анализ, монтаж |
-| Видео и речь | ffprobe, FFmpeg, faster-whisper | Метаданные, производные материалы, речь, рендер |
-| AI | ProviderRouter: Gemini и OpenAI-совместимый HTTP API | Отдельные провайдеры и модели для анализа, творческих ролей и эмбеддингов |
-| Обновления | REST + SSE | Прогресс, ответы и актуальное состояние |
-| Наблюдаемость | OpenTelemetry, JSON-логи, Prometheus, Grafana, Alertmanager | Трассы операций, метрики, диагностика и алерты |
-| Проверки | pytest, Hypothesis, Vitest, Playwright, k6 | Логика, интеграции, интерфейс, медиа и нагрузка |
+| Interface | React, TypeScript, Vite | Projects, stories, chat and playback |
+| API | Python, FastAPI, Pydantic | Authentication, commands and state queries |
+| Data | PostgreSQL 18, SQLAlchemy, Alembic | Owners, projects, versions and queue |
+| Search | pgvector >= 0.8.0, PostgreSQL FTS | Vector and text search in the database |
+| Media | SeaweedFS S3 API, boto3 | Private objects on the owner's NAS/server |
+| Processing | Python worker, io/ai/render queues | Imports, analysis and editing |
+| Video and speech | ffprobe, FFmpeg, faster-whisper | Metadata, derivatives, speech and rendering |
+| AI | ProviderRouter: Gemini and compatible HTTP APIs | Separate providers/models for analysis, creative roles and embeddings |
+| Updates | REST + SSE | Progress, replies and current state |
+| Observability | OpenTelemetry, JSON logs, Prometheus, Grafana, Alertmanager | Traces, metrics, diagnostics and alerts |
+| Verification | pytest, Hypothesis, Vitest, Playwright, k6 | Logic, integrations, UI, media and load |
 
-Модули одной кодовой базы: identity/projects, media, catalog/search, editing/agents, jobs, provider adapters. API и worker используют общие модели и сервисные операции. Масштабируем количество процессов без копирования доменной логики в отдельные микросервисы.
+These are target choices; the alpha uses explicit psycopg SQL, polling and a smaller toolset. Modules cover identity/projects, media, catalog/search, editing/agents, jobs and provider adapters. API and workers share domain models and service operations. Scale process counts without duplicating domain logic across microservices.
 
-На старте один API и один worker могут работать на одном сервере. SeaweedFS — на NAS либо на том же сервере. Если NAS слабый, обработка работает на отдельном CPU/GPU-хосте. Совместимость NAS с контейнерами/бинарниками проверяем перед установкой. PostgreSQL доступен по сети; его каталог данных находится на диске хоста БД, не в S3 или SMB/NFS-папке.
+SeaweedFS can run on the NAS or application server. A separate CPU/GPU host handles processing if the NAS is underpowered. Verify container/binary compatibility before installation. PostgreSQL is network-accessible internally, with its data directory on the database host's disk, not S3 or an SMB/NFS folder.
 
-С первого выпуска проект имеет owner_id. users связывает UUID с проверенными issuer/subject провайдера входа; email не используется как постоянная идентичность. API проверяет подпись/issuer/audience/срок токена либо доверяет только защищённому шлюзу аутентификации, исключающему подмену заголовков. Вход в браузере — защищённая cookie с защитой изменяющих запросов от CSRF.
+Projects have `owner_id` from the first release. In the target identity design, `users` maps UUIDs to verified identity-provider issuer/subject pairs; email is not permanent identity. The API validates signature, issuer, audience and expiry, or trusts only a protected authentication gateway that prevents header forgery. Browser authentication uses secure cookies and CSRF protection. The alpha's single-owner session is documented separately.
 
-Каждый пользовательский запрос проверяет владельца проекта, включая поиск, SSE и подписанные ссылки. Составные FK с project_id защищают связи, но не авторизуют чтение. Клиентский owner_id не является доказательством доступа. Worker — доверенный внутренний процесс; браузер не получает его интерфейс, ключи БД или постоянные S3-ключи. Совместный доступ и project_members добавляются при появлении такого сценария.
+Every user request checks project ownership, including search, SSE and signed links. Composite foreign keys with `project_id` protect relationships but do not authorize reads. Client-supplied `owner_id` is not proof of access. Workers are trusted internal processes; browsers receive neither worker interfaces nor database or permanent S3 credentials. Shared access adds `project_members` when required.
 
-API не хранит единственную копию сессии или состояния проекта в памяти процесса. При переподключении SSE клиент получает актуальный снимок jobs/stories/messages. В v1 API периодически читает изменения из PostgreSQL; LISTEN/NOTIFY можно добавить как ускорение, но не как гарантированный журнал. Переключение экземпляра API не теряет финальные ответы и версии.
+API memory is not the sole source of sessions or project state. Reconnecting SSE clients receive a current jobs/stories/messages snapshot. Initially, API processes can poll PostgreSQL; LISTEN/NOTIFY may reduce latency but is not a durable event log. Switching API instances preserves final replies and versions.
 
-Закрытие браузера не отменяет серверные задания. Незавершённая загрузка останавливается и может быть продолжена, при необходимости с повторным выбором файла. Транзакции БД не удерживаются во время AI, загрузок и рендера.
+Closing a browser does not cancel server jobs. An incomplete upload pauses and can resume, potentially after the file is selected again. Database transactions never span AI requests, uploads or renders.
 
-## 3. Схема компонентов
+## 3. Components
 
 ```mermaid
 flowchart TB
-    subgraph UI["Дизайн «Истории»"]
-        U["Импорт видео"]
-        S["Карточки историй"]
-        P["Проигрыватель и версии"]
-        C["Чат проекта / истории"]
+    subgraph UI["Stories interface"]
+        U["Import footage"]
+        S["Story cards"]
+        P["Player and versions"]
+        C["Project / story chat"]
     end
-    U --> API["FastAPI: 1..N экземпляров, REST + SSE"]
+    U --> API["FastAPI: 1..N instances, REST + SSE"]
     S <--> API
     P <--> API
     C <--> API
-    API <--> DB[("PostgreSQL + pgvector: данные, очередь, поиск")]
-    API -->|"S3: разрешения и проверка"| FS[("SeaweedFS на NAS: оригиналы, превью, фильмы")]
-    U -->|"Загрузка частями по временным ссылкам"| FS
-    FS -->|"Чтение по временной ссылке"| P
+    API <--> DB[("PostgreSQL + pgvector: data, queue, search")]
+    API -->|"S3 authorization and verification"| FS[("SeaweedFS on NAS: originals, previews, films")]
+    U -->|"Multipart upload through temporary links"| FS
+    FS -->|"Read through temporary link"| P
     W["Worker 1..N: io / ai / render"] <--> DB
     W <--> FS
-    W <--> TMP["Временный SSD-каталог своего worker"]
+    W <--> TMP["Worker-local temporary SSD directory"]
     W --> MEDIA["ffprobe / FFmpeg / faster-whisper"]
-    W --> AI["ProviderRouter: конфигурация провайдера и модели каждой роли"]
+    W --> AI["ProviderRouter: provider and model per role"]
     AI --> GA["Gemini adapter"]
-    AI --> OA["OpenAI-compatible adapter: облачный или локальный endpoint"]
+    AI --> OA["Compatible adapter: hosted or local endpoint"]
     AI --> W
     MEDIA --> W
 ```
 
-Оригиналы, уменьшенные копии и готовые фильмы постоянно находятся в собственном S3-хранилище. Для рендера worker получает нужные объекты во временный каталог на SSD сервера и затем удаляет рабочие копии. Выбранный AI-провайдер получает уменьшенное видео либо выборку кадров, описания и релевантную переписку. Для локального AI можно указать собственный совместимый endpoint; возможность анализа кадров и качество зависят от выбранной модели.
+Originals, proxies and completed films remain in private S3. Workers fetch required objects into temporary server SSD directories for rendering and remove working copies afterward. Selected AI providers receive reduced video or sampled frames, descriptions and relevant conversation. Local inference uses a compatible endpoint; frame-analysis capability and quality depend on the model.
 
-## 4. AI-провайдер и модели
+## 4. Providers and models
 
-Провайдер не является частью доменной логики. `ProviderRouter` выбирает адаптер и модель по роли из `config/ai.toml`, проверяет структурированный ответ и записывает единый аудит. Доступны Gemini и OpenAI-совместимые Chat Completions / Embeddings endpoints, в том числе локальные. Подробности настройки и ограничения: [Provider routing](providers.md).
+Providers are outside domain logic. `ProviderRouter` selects the adapter/model from `config/ai.toml`, validates structured output and records a common audit. Gemini and compatible Chat Completions / Embeddings endpoints, including local endpoints, are supported. See [provider routing](providers.md).
 
-Для творческих ролей реализована явная цепочка до двух резервов: внешний API, своя LLM или заранее запущенная LLM на Vast.ai через SSH/VPN. Переключение вызывают только временные ошибки inference; каждая попытка сохраняет фактический provider/model в `ai_calls`. Видеоанализ и embeddings меняются явно, чтобы сохранить возможности входных данных и идентичность векторного пространства. [Схема самостоятельного размещения](self-hosted-llm.md) также описывает следующий этап: отдельный controller аренды GPU с lease, бюджетом, readiness и idle TTL. Автоматический provisioning пока не реализован.
+Creative roles support an explicitly configured chain of up to two backups: hosted APIs, an owner's LLM or an already running Vast.ai LLM behind SSH/VPN. Only transient inference failures trigger switching. Every attempt records its actual provider/model in `ai_calls`. Video analysis and embedding routes change explicitly to preserve input capabilities and vector identity. The [self-hosting guide](self-hosted-llm.md) also describes a future GPU-rental controller with a lease, budget, readiness and idle TTL; automatic provisioning is not implemented.
 
-| Задача | Модель / инструмент | Вход → результат |
+| Task | Route / tool | Input → output |
 |---|---|---|
-| Анализ содержимого | Маршрут `analyst`, модель с видео или изображениями | Видео / кадры с таймкодами → описания сцен |
-| План и правки | `director`, `music`, `editor`, `reviewer`; модели независимы | Каталог и пожелания → проверяемый JSON плана |
-| Поиск по смыслу | Маршрут `embedding`, 768 измерений | Текст сцен и запрос → векторы одного профиля |
-| Распознавание речи | Нативное видео при поддержке модели; отдельный ASR — будущая работа | В режиме кадров поле речи обязано быть пустым |
-| Выполнение монтажа | FFmpeg на своём сервере | Проверенный план + исходники → MP4 |
+| Content analysis | `analyst`, video- or image-capable model | Video / timestamped frames → scene descriptions |
+| Planning and changes | Independent `director`, `music`, `editor`, `reviewer` models | Catalog and brief → validated plan JSON |
+| Semantic search | `embedding`, 768 dimensions | Scene text and query → one profile's vectors |
+| Speech recognition | Native video when supported; separate ASR is future work | Sampled-frame analysis must leave speech empty |
+| Editing execution | FFmpeg on the owner's server | Validated plan + sources → MP4 |
 
-Пример конфигурации сохраняет Gemini как исходный вариант, но роли можно перевести на другие endpoints без изменения пайплайна. Одна попытка задания использует один снимок конфигурации; следующая читает обновлённый файл. Автоматического fallback на другого поставщика нет. Перед живым запуском проверяем доступность модели, форматы ответа, модальности и права на передаваемые материалы.
+The bundled configuration retains Gemini as a starting option. Roles can move to other endpoints without changing the pipeline. Each job attempt snapshots configuration; later attempts read the updated file. Fallback is opt-in for creative roles. Before live use, verify model availability, response formats, modalities and permission to send the source material.
 
-Векторизуем текстовый каталог сцен; Gemini использует `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`, совместимый адаптер допускает префиксы модели для документов и запросов. Векторы нормализуем. Смена модели, совместимого endpoint или префиксов создаёт отдельный профиль. Переиндексация запускается явной командой «Обновить поиск», проходит через очередь, сохраняет старые профили и не требует повторного анализа видео. До заполнения профиля семантический поиск возвращает 409; полнотекстовый работает независимо.
+The searchable representation is a textual scene catalog. Gemini uses `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`; compatible endpoints can use model-specific document/query prefixes. Vectors are normalized. Changing the model, compatible endpoint or prefixes selects a new profile. **Rebuild search** queues reindexing, preserves old profiles and does not rerun video analysis. Semantic search returns 409 until the new profile is complete; full-text search works independently.
 
-В текущем alpha worker получает оригинал из S3 и создаёт временный proxy. Gemini получает его inline; совместимая vision-модель получает ограниченную выборку JPEG с временными отметками без аудио. Закрытый адрес NAS не передаётся как публичный URL. Chunking, внешние файловые API и управление их сроками хранения остаются развитием для больших материалов.
-
-Границы интеграции:
+The alpha fetches the original from S3 and creates a temporary proxy. Gemini receives it inline; compatible vision models receive bounded timestamped JPEG samples without audio. A private NAS address is never supplied as a public URL. Chunking, provider file APIs and their retention lifecycle are future work for larger inputs.
 
 ```text
 analyze_video(derivative, time_range, schema) -> observations
@@ -119,27 +117,23 @@ embed_documents(texts) -> vectors
 embed_query(text) -> vector
 ```
 
-Секрет API хранится на стороне backend, например в системном хранилище учётных данных или переменной окружения. В БД и браузер ключ не передаётся. Текст из видео и расшифровки — данные для анализа; команды на изменение проекта исходят из пользовательского чата.
+Secrets remain on the backend, in environment variables or a credential store, outside the database and browser. Transcripts and video text are evidence to analyze; commands to change a project originate in user chat.
 
-### Агентные роли
+The director develops a script and selects scenes. The music agent selects music. The **editing agent** plans pacing, transitions, effects, titles and visual treatment. The reviewer evaluates actual previews in the target design. Roles run as needed inside existing workers, with bounded tools and a shared budget; users interact with one chat.
 
-Режиссёр формирует сценарий и выбирает сцены, музыкальный агент подбирает музыку, **монтажный агент** проектирует ритм, переходы, эффекты, титры и оформление. Рецензент оценивает фактическое превью. Роли запускаются по необходимости внутри существующих worker, используют ограниченные инструменты и общий бюджет; пользователь общается с одним чатом.
+The editing agent searches compatible presets, tests an effect on a short excerpt and returns plan changes referencing effect IDs/versions. A trusted plan compiler renders them. External media is stored in S3 with provenance and usage terms. Details: [agents and effects](agents-and-effects.md).
 
-Монтажный агент ищет совместимые пресеты в каталоге, проверяет эффект на коротком фрагменте и возвращает изменение плана с ID и версиями эффектов. Рендер выполняет проверенный компилятор плана. Внешние медиа для оформления сохраняются в S3 с источником и условиями использования. Подробный поток, инструменты, хранение и ограничения описаны в [Агенты и монтажные эффекты](agents-and-effects.md).
+## 5. Storage
 
-## 5. Хранилища
+### PostgreSQL: structured data and vectors
 
-### PostgreSQL — структурированные данные и векторы
+One database holds users, projects, media references, plans, conversation, jobs and embeddings. Use UUID, `timestamptz`, JSONB for variable metadata and `vector(768)`. Relationships, status, identifiers and filter fields are normal columns; do not put the entire project in one JSON document. Services maintain `updated_at`.
 
-В одной БД находятся пользователи, проекты, ссылки на медиа, планы, переписка, задания и эмбеддинги. Используем UUID, timestamptz, JSONB для различающихся метаданных и vector(768). Связи, статусы, идентификаторы и поля фильтрации — обычные столбцы. Весь проект в один JSON не помещаем. Поля updated_at обновляет сервис.
+Connection pools are bounded per process and collectively fit the PostgreSQL budget. The target deployment uses a separate migration role; API/workers neither own tables nor run DDL. Backups include restoration tests; lower RPO requires base backups plus WAL archiving/PITR.
 
-Пул соединений каждого процесса ограничен; сумма по экземплярам укладывается в бюджет PostgreSQL. Схема применяется ролью миграций; API/worker не владеют таблицами и не выполняют DDL. Для резервирования используем средства PostgreSQL с проверкой восстановления; при требовании малого RPO — base backup и архив WAL/PITR.
+### SeaweedFS: persistent media on the NAS
 
-### SeaweedFS — постоянное хранилище медиа на NAS
-
-Для первой установки выбираем **SeaweedFS в режиме одного узла**. Официальная документация описывает запуск через `weed mini` или контейнер; S3 API поддерживает multipart-загрузки, временные подписанные ссылки и чтение диапазонов. Конкретную версию образа закрепляем после проверки на выбранном NAS. Кластер для первого прототипа не требуется. [SeaweedFS](https://github.com/seaweedfs/seaweedfs), [поддержка S3 API](https://github.com/seaweedfs/seaweedfs/wiki/Amazon-S3-API).
-
-Начинаем с одного приватного bucket `vmerger` и префиксов внутри него:
+Start with **single-node SeaweedFS**. Its documentation describes `weed mini` and container deployment, with S3 multipart uploads, signed URLs and range reads. Pin an image after checking the selected NAS. No initial cluster is required. [SeaweedFS](https://github.com/seaweedfs/seaweedfs), [S3 API support](https://github.com/seaweedfs/seaweedfs/wiki/Amazon-S3-API).
 
 ```text
 s3://vmerger/
@@ -148,76 +142,72 @@ s3://vmerger/
   renders/<project_id>/<object_id>
 ```
 
-Это ключи объектов, а не пути, которые приложение открывает через файловую систему. Физически данные по-прежнему лежат на дисках NAS, но управляет ими сервис хранения. Приложение работает через S3 API и не зависит от внутренних каталогов SeaweedFS. Оригинальное имя и MIME-тип сохраняются в метаданных; исходные байты не перекодируются при импорте.
+These are object keys, not filesystem paths opened by the application. Bytes physically reside on NAS disks, managed by the storage service. The application uses S3 without relying on SeaweedFS's internal directories. Original filename and MIME type are metadata; importing does not transcode original bytes.
 
-Конфигурация сервера связывает alias storage_backend с endpoint и настройками S3. Endpoint, регион, режим адресации и ссылка на секреты задаются на сервере; пароли не записываются в БД. `storage_objects` содержит `storage_backend`, `bucket`, `object_key`, назначение, статус, размер, SHA-256, ETag и время проверки. `assets`, `derivatives` и `renders` ссылаются на `storage_object_id`. Подписанные URL короткоживущие: выдаём их по запросу после проверки доступа, не используем как постоянные адреса в БД. ETag храним отдельно и не считаем SHA-256.
+Server configuration maps a `storage_backend` alias to endpoint, region, addressing mode and secret references. Passwords are not database fields. `storage_objects` records backend, bucket, key, purpose, status, size, SHA-256, ETag and verification time. `assets`, `derivatives` and `renders` reference `storage_object_id`. Short-lived signed URLs are generated after authorization, never stored as permanent addresses. ETag is separate from SHA-256.
 
-### Загрузка и публикация результата
+### Upload and publication
 
-1. API создаёт запись объекта с новым ключом и сессию в `upload_sessions`, затем начинает S3 multipart upload. Повтор запроса с тем же `request_id` возвращает ту же сессию; восстановление проверяет также отпечаток параметров запроса.
-2. Браузер получает временные ссылки на конкретные части и отправляет байты прямо в SeaweedFS. Размер части рассчитывается из размера файла и лимита частей; начальный ориентир — 16–64 MiB. API выдаёт ссылки порциями, ограничивает размер/число частей и разрешённый ключ.
-3. Сервис сверяет части через S3 `ListParts`, получает номера, размеры и ETag из S3, выполняет `CompleteMultipartUpload`. Сообщение браузера «готово» само по себе не подтверждает полноту загрузки. После обрыва догружаются отсутствующие части; после перезапуска браузер может потребовать повторно выбрать тот же файл. Проверяем размер и отпечаток. Для надёжной проверки продолжения сравниваем полный клиентский SHA-256 с хешем собранного объекта либо проверяем содержимое уже загруженных частей; одного имени недостаточно.
-4. Worker проверяет фактический размер через `HEAD`, читает объект, вычисляет SHA-256 и проверяет контейнер через ffprobe. Если клиент передал ожидаемый SHA-256, сравнивает его. Объект получает статус `available`, создаётся `asset`, сессия получает результат. Размер и SHA-256 хранятся только в storage_objects. Ссылка на asset, завершение сессии и постановка analyze_asset фиксируются одной транзакцией. При совпадении хеша в том же проекте возвращаем существующий asset; лишний объект очищается после фиксации результата. Частичный уникальный индекс оригиналов защищает от одновременного импорта дублей; конфликт обрабатываем как дедупликацию.
-5. Производные файлы и рендеры worker сначала создаёт и проверяет во временном каталоге сервера, затем загружает под новым ключом. После завершения загрузки проверяет размер и целостность сохранённого объекта; в v1 допускается контрольное чтение с вычислением хеша. Одной транзакцией публикует ссылку на объект и отмечает результат готовым. Незавершённый объект проигрывателю недоступен.
+1. The API allocates a new object key and `upload_sessions` row, then starts S3 multipart upload. Repeating `request_id` returns the same session after checking the request fingerprint.
+2. The browser receives temporary URLs for specific parts and sends bytes directly to SeaweedFS. Part size follows file size and part-count limits; 16–64 MiB is an initial range. URLs are issued in batches with bounded size/count and a fixed authorized key.
+3. The service uses `ListParts` to obtain part numbers, sizes and ETags from S3, then completes multipart upload. A browser's “done” message is not proof. Resume missing parts after interruption; a restarted browser may require the same file again. Verify size and fingerprint. Reliable resumption compares the complete client SHA-256 with the assembled object, or verifies already uploaded part contents; a filename alone is insufficient.
+4. A worker checks actual size with `HEAD`, reads and hashes the object, and probes the container. Compare an expected client hash if supplied. Mark the object `available`, create the asset and complete the session. Store size/hash only in `storage_objects`. Asset reference, session result and `analyze_asset` enqueue commit together. A same-project hash match returns the existing asset; clean up the redundant object afterward. A partial unique index handles concurrent duplicates.
+5. Workers create and validate derivatives/renders in temporary directories, upload under fresh keys and verify stored size/integrity, initially by reading back and hashing. Publish the object reference and ready status in one transaction. Incomplete objects remain unavailable to playback.
 
-POST complete одной транзакцией переводит сессию в verifying и ставит verify_upload, отвечая 202. Задание сверяет/завершает multipart и проверяет объект; повторный complete возвращает прежнее состояние. POST abort ставит reconcile_storage для указанной сессии и отменяет её активную проверку. aborted означает подтверждённое прерывание S3, намерение отмены сохраняется в задании до выполнения операции.
+`POST complete` atomically sets `verifying` and queues `verify_upload`, returning 202. Repeated completion returns existing state. `POST abort` queues `reconcile_storage` and cancels active verification. `aborted` means S3 abort was confirmed; cancellation intent remains durable until performed.
 
-Общей транзакции между S3 и PostgreSQL нет. Реестр объекта создаётся **до** записи байтов, ключ каждой новой попытки уникален. Повторное завершение загрузки сверяет состояние с S3: если объект уже существует, проверяет его, а не начинает загрузку заново. Периодическое задание восстанавливает зависшие состояния и убирает подтверждённые бесхозные объекты после защитного интервала. Незавершённые multipart-сессии прерываются через S3 API; неизвестные сессии, появившиеся при сбое между S3 и БД, также сверяются. Отметка задания как выполненного проверяет актуальность аренды worker. Атомарное переименование файлов не используется как гарантия публикации в S3.
+There is no shared S3/PostgreSQL transaction. Create the object registry **before** writing bytes; each attempt uses a unique key. Repeated completion reconciles S3 state and verifies an existing object rather than starting again. Periodic reconciliation repairs stuck states and removes confirmed orphans after a grace period. Abort incomplete multipart sessions through S3, including sessions whose creation succeeded before a database failure. Completion checks the current worker lease. Filesystem rename is not an S3 publication guarantee.
 
-Публикацию выполняет единый сервисный метод. Порядок блокировок: project → job → storage_object. Под блокировками проверяем active-проект, актуальный lease_token, проверенный объект, назначение и принадлежность. Затем фиксируем ссылки, результат и следующее задание одной транзакцией. Долгих сетевых операций в ней нет. Чтение готового рендера также требует available-объект. Уже опубликованные байты и ключи не изменяются — это сервисный контракт.
+A single publication service locks project → job → storage object. It checks an active project, current `lease_token`, verified object, purpose and ownership, then commits references, result and next job together. No network I/O occurs under those locks. Reading a ready render also requires an available object. Published bytes and keys are immutable by service contract.
 
-Для воспроизведения API выдаёт подписанный GET URL с ограниченным сроком. Клиент обновляет ссылку при истечении, сохраняя позицию просмотра. S3 endpoint должен быть доступен браузеру через LAN/VPN и HTTPS; внешнее имя для подписания и внутреннее имя для worker настраиваются отдельно. Нельзя просто заменить хост в уже подписанном URL. CORS разрешает только origin приложения и нужные операции/заголовки, включая чтение ETag при загрузке и Range при просмотре.
+The target playback API issues expiring signed GET URLs. Clients renew them while preserving playback position. Browser access requires a reachable LAN/VPN HTTPS endpoint; internal worker and external signing endpoints are configured separately. Replacing a signed URL's hostname invalidates it. CORS allows only the application origin and needed headers/operations, including upload ETags and playback Range requests. The alpha instead proxies authenticated media through the API.
 
-### Временные данные, удаление и резервные копии
+### Temporary data, deletion and backups
 
-Рабочий каталог worker имеет лимит места и привязан к `job_id`/попытке. Перед тяжёлой задачей проверяем доступное место. После завершения или отмены копии очищаются; после сбоя очистка учитывает действующие аренды. Очистка этого каталога не должна уничтожать постоянные оригиналы. На клиентском компьютере приложение не создаёт постоянную библиотеку медиа.
+Worker scratch directories are scoped to job/attempt and have space limits. Check free space before expensive work. Clean up after completion/cancellation; crash recovery respects active leases. Scratch cleanup must never delete persistent originals. The application does not maintain a permanent media library on the client computer.
 
-Производные материалы можно пересоздавать из оригиналов. Оригиналы и сохранённые экспорты не удаляются по TTL. При удалении проекта сначала фиксируем состояние `deleting`, блокируем новые загрузки, отменяем задания и multipart-сессии, дожидаемся остановки активных операций и истечения выданных разрешений на запись. Затем повторяем очистку объектов до подтверждения результата и только после этого удаляем строки проекта. Удаление строк PostgreSQL само по себе не удаляет S3-объекты.
+Derivatives can be recreated. Originals and saved exports do not expire by TTL. Project deletion first sets `deleting`, blocks new uploads, cancels jobs/multipart sessions and waits for active work and write permissions to expire. Repeat object cleanup until confirmed, then remove project rows. Deleting database rows does not delete S3 objects.
 
-Резервируем оригиналы, сохранённые экспорты и восстанавливаемую копию PostgreSQL на отдельный носитель/сервер. При резервировании внутреннего состояния SeaweedFS нужны и данные томов, и его метаданные; альтернативный путь — копия объектов через S3 с манифестом ключей и хешей. Копирование на второй каталог того же NAS не защищает от потери NAS. План бэкапа включает пробное восстановление проекта. Очистка учитывает окно хранения бэкапов: восстановленная БД должна ссылаться на сохранённые оригиналы.
+Back up originals, saved exports and recoverable PostgreSQL data to a separate device/server. SeaweedFS backups need both volume data and metadata; alternatively copy objects through S3 with a key/hash manifest. A second directory on the same NAS does not protect against NAS loss. Test project restoration. Cleanup must respect backup retention so restored databases still reference retained originals.
 
-### Поиск: pgvector и PostgreSQL FTS
+### Search: pgvector and PostgreSQL FTS
 
-Для стартового профиля gemini-embedding-001:text-v1:768 храним один нормализованный vector(768) на смысловой фрагмент. Карточка объединяет происходящее, обстановку, описание звука и относящуюся к диапазону речь. Вектор запроса вычисляется на время поиска. В таблице сохраняются модель, профиль подготовки текста и хеш текста.
+The starting `gemini-embedding-001:text-v1:768` profile stores one normalized vector per semantic segment. Its text combines action, setting, sound description and related speech. Query vectors are transient. Store model, preprocessing profile and source-text hash.
 
-Есть B-tree по project_id/profile_key и отдельный частичный HNSW-индекс стартового профиля. Для небольшой выборки проекта используем точный поиск с предварительным отбором. Для большой — HNSW с фильтрами и iterative_scan. Порог определяем измерениями на сервере. Примеры запросов с проверкой владельца — в worker-and-search.sql.
+Use B-tree indexes on project/profile and a partial HNSW index for the initial profile. Small project subsets use exact search after filtering; large subsets can use filtered HNSW with `iterative_scan`. Set thresholds from measurements. Owner-scoped examples are in `worker-and-search.sql`.
 
-HNSW может пропускать ближайшие результаты. Проверяем recall@k относительно точного поиска, особенно с фильтрами по проекту; настраиваем глубину сканирования и при необходимости используем точный поиск или разбиение данных. [pgvector: фильтрация](https://github.com/pgvector/pgvector#filtering).
+Measure HNSW recall@k against exact search, especially with project filters. Tune scan depth or use exact search/partitioning when needed. [pgvector filtering](https://github.com/pgvector/pgvector#filtering).
 
-Смена модели создаёт новый профиль и отдельный индекс с фоновым заполнением; несовместимые пространства не смешиваем. Другая размерность требует миграции/отдельной таблицы, поскольку vector(768) фиксирован. Мультимодальные эмбеддинги — возможное расширение после оценки пропусков текстового поиска.
+Model changes create a new profile and separately populated index. Never mix incompatible spaces. A different dimension requires migration or a separate table because `vector(768)` is fixed. Multimodal embeddings are a possible extension after measuring text-search omissions.
 
-PostgreSQL FTS индексирует segments.search_text через generated tsvector и GIN. simple-конфигурация подходит для смешанного текста, но не обеспечивает русскую морфологию. Объединяем ранги FTS и векторных кандидатов, затем учитываем историю и ограничения. Если описания недостаточно, повторно анализируем фрагмент.
+FTS indexes `segments.search_text` through a generated tsvector and GIN. The `simple` configuration handles mixed-language tokens without language-specific stemming. Combine FTS and vector ranks, then apply history and constraints. Reanalyze a source excerpt if its description is insufficient.
 
-## 6. Таблицы: что упростили и что оставили
+## 6. Tables and simplifications
 
-schema.sql создаёт пустую PostgreSQL с pgvector. Это новая исходная схема, не миграция существующей SQLite. Реальных пользовательских данных в приложении ещё нет; последующие изменения оформляем миграциями Alembic.
+`schema.sql` initializes PostgreSQL/pgvector; it is not a migration of an existing SQLite database. Later changes use Alembic. The original design had 21 ordinary tables plus FTS; the simplified baseline has 16, including users. Simplify mechanisms without collapsing the project into one record. Later migrations can add evaluation storage.
 
-Предыдущая схема содержала 21 обычную таблицу и FTS-таблицу. Новая — 16 таблиц, включая добавленных пользователей. Упрощаем механизмы, а не пытаемся свести весь проект к одной записи.
-
-| Убрали / изменили | Причина |
+| Removed / changed | Reason |
 |---|---|
-| events, event_segments, story_events | События пока промежуточный результат анализа. Группировку сохраняем в jobs.checkpoint, состав фильмов — в edit_versions.plan. Отдельный каталог событий понадобится только при таком пользовательском сценарии. |
-| job_dependencies | Последовательность известных процессов описывается в коде и checkpoint, без универсального движка графов заданий. |
-| upload_parts | Части подтверждает S3 ListParts, второй журнал состояния не нужен. |
-| storage_locations | Для выбранного хранилища достаточно alias конфигурации и bucket у объекта. |
-| Копии хеша/размера в assets, derivatives, renders | Эти свойства хранятся только у storage_objects. |
-| Повторяющиеся триггеры публикации | Проверку и публикацию выполняет сервис под блокировками. SQL сохраняет FK/UNIQUE/CHECK и один триггер неизменяемости версий. |
-| FTS5 и BLOB-векторы | Заменены на tsvector/GIN и pgvector. |
+| events, event_segments, story_events | Event grouping is intermediate checkpoint data; film membership belongs in version plans. Add a catalog only when the product needs it. |
+| job_dependencies | Known workflows live in code/checkpoints without a generic DAG engine. |
+| upload_parts | S3 ListParts is authoritative; avoid a second part ledger. |
+| storage_locations | Backend alias and bucket on each object are sufficient initially. |
+| Duplicated hashes/sizes | Keep them only in storage_objects. |
+| Repeated publication triggers | Services validate under locks; SQL retains FK/UNIQUE/CHECK and version immutability. |
+| FTS5 and BLOB vectors | Replaced by tsvector/GIN and pgvector. |
 
-| Область | Таблицы | Содержимое |
+| Area | Tables | Contents |
 |---|---|---|
-| Владельцы и проекты | users, projects | Идентичность, владелец, пожелание, настройки |
-| Медиа | storage_objects, assets, derivatives, upload_sessions | Объекты NAS, исходники, производные материалы и загрузки |
-| Каталог | segments, transcript_spans, segment_embeddings | Диапазоны, описания, речь, векторы |
-| Монтаж | stories, edit_versions, messages, renders | Фильмы, планы, чат и результаты |
-| Выполнение | jobs | Очередь, попытки, аренды, checkpoint, отмена |
-| Внешний AI | provider_files, ai_calls | Временные файлы, вызовы и расход |
+| Ownership | users, projects | Identity, owner, brief, settings |
+| Media | storage_objects, assets, derivatives, upload_sessions | Stored objects, sources, derivatives, uploads |
+| Catalog | segments, transcript_spans, segment_embeddings | Ranges, descriptions, speech, vectors |
+| Editing | stories, edit_versions, messages, renders | Films, plans, chat, outputs |
+| Execution | jobs | Queue, attempts, leases, checkpoint, cancellation |
+| External AI | provider_files, ai_calls | Temporary files, calls, usage |
 
-Загрузки, реестр объектов, версии и задания сохраняем: они нужны для восстановления после обрыва, отмены и повторного запуска. Transcript_spans сохраняет фразы и слова с таймкодами независимо от меняющихся визуальных сегментов.
+Upload sessions, object registry, versions and jobs support recovery, cancellation and retries. Transcript spans preserve phrases/words independently of changing visual segmentation. IDs are UUIDs, dates `timestamptz`, media ranges BIGINT microseconds with half-open intervals `[start_us, end_us)`. Do not replace an unknown capture date with import time; retain timezone and date provenance in asset metadata.
 
-Все идентификаторы — UUID, даты — timestamptz, медийные диапазоны — BIGINT в микросекундах, полуинтервал [start_us, end_us). Неизвестную дату съёмки не заменяем датой импорта; исходный часовой пояс и происхождение даты храним в assets.metadata.
-
-~~~mermaid
+```mermaid
 erDiagram
     USERS ||--o{ PROJECTS : owns
     PROJECTS ||--o{ STORAGE_OBJECTS : stores
@@ -232,180 +222,172 @@ erDiagram
     EDIT_VERSIONS ||--o{ RENDERS : renders
     PROJECTS ||--o{ MESSAGES : chat
     PROJECTS ||--o{ JOBS : schedules
-~~~
+```
 
-SQL не проверяет содержимое S3 и JSON-плана: диапазоны должны попадать в длительность исходника, ссылки плана принадлежать проекту, опубликованный объект быть проверен. Эти правила валидирует сервис. Сервисные контракты перечислены в конце schema.sql.
+SQL cannot inspect S3 contents or JSON-plan semantics. Services enforce source bounds, project-scoped plan references and verified publication. See service contracts at the end of `schema.sql`.
 
-## 7. Канонический план монтажа
+## 7. Canonical edit plan
 
-`edit_versions.plan` — источник правды для конкретной версии. Рендер всегда получает ID версии, а не подвижную ссылку «текущая история». Файлы JSON при экспорте являются копией данных БД.
+`edit_versions.plan` is authoritative for a specific version. Rendering takes a version ID, not a moving “current story” reference. Exported JSON is a copy of database data.
 
 ```json
 {
   "schema_version": 1,
   "output": {"width": 1920, "height": 1080, "fps_num": 30, "fps_den": 1},
-  "clips": [
-    {
-      "clip_id": "occurrence_1",
-      "segment_id": "segment_42",
-      "asset_id": "asset_8",
-      "source_in_us": 12400000,
-      "source_out_us": 21800000,
-      "audio_mode": "original"
-    }
-  ],
+  "clips": [{
+    "clip_id": "occurrence_1",
+    "segment_id": "segment_42",
+    "asset_id": "asset_8",
+    "source_in_us": 12400000,
+    "source_out_us": 21800000,
+    "audio_mode": "original"
+  }],
   "music": null,
   "transitions": []
 }
 ```
 
-`clip_id` — вхождение момента в этот фильм, `segment_id` — момент в исходнике. Результаты повторного анализа не меняют диапазоны сегментов, уже использованных в версиях: сохраняем новую разметку с новой идентичностью или явно сопоставляем её со старой.
+`clip_id` identifies an occurrence in a film; `segment_id` identifies a source moment. Reanalysis must not alter segments already referenced by versions: create new annotation identities or explicitly map them to old ones.
 
-Снимок `constraints` содержит обязательные/исключённые моменты, требования к звуку, длительности и стилю, а также ссылки на сообщения, откуда возникли правила. Снимки полные: история воспроизводится без повторного запроса к модели.
+The `constraints` snapshot records required/excluded moments, audio, duration and style requirements, with source-message references. Complete snapshots let versions render without asking a model again.
 
-Пример выше показывает базовую версию контракта. Для агентного монтажа следующая версия контракта добавляет сценарий, стабильные ID экземпляров эффектов, версии и снимки пресетов, параметры, временные привязки, зависимости от медиа и профиль движка. Обновление сопровождается валидатором и миграцией формата; старые версии остаются читаемыми. Дизайн расширения приведён в agents-and-effects.md; текущая SQL-схема не реализует прикладную проверку этих полей.
+The example is a baseline target contract. Agent-driven editing extends it with script, stable effect-instance IDs, versioned preset snapshots, parameters, time bindings, resource dependencies and renderer profile. A validator and format migration accompany changes; old versions remain readable. See [agents and effects](agents-and-effects.md). SQL alone does not validate those fields.
 
-## 8. Путь от загрузки до готовой истории
+## 8. From upload to story
 
-1. **Import:** загрузка оригинала частями в SeaweedFS, проверка размера/хеша/контейнера, создание `asset` со ссылкой на объект.
-2. **Prepare:** временная рабочая копия на сервере; уменьшенные копии, обложки и звук публикуются в S3, карта времён — в БД.
-3. **Transcribe + Analyze:** анализ звука и видео; эти этапы независимы и могут выполняться параллельно в дальнейшем.
-4. **Index:** объединение наблюдений и речи, создание сегментов, FTS и эмбеддингов.
-5. **Group:** группировка событий по времени, контексту и содержанию.
-6. **Plan:** режиссёр предлагает истории и фрагменты; музыкальный и монтажный агенты подбирают звук и оформление. Управляющий процесс проверяет и сохраняет полную версию плана.
-7. **Preview:** рендер уменьшенного MP4 и публикация в S3, техническая проверка и оценка рецензентом. Не более двух циклов творческой доработки; каждая доработка создаёт новую версию. Исходники полного качества используются при экспорте.
-8. **Review by chat:** точечные изменения, новая версия и новый предпросмотр.
+1. **Import:** multipart upload to SeaweedFS, size/hash/container validation, asset creation.
+2. **Prepare:** temporary server copy; proxies, covers and audio in S3, time maps in PostgreSQL.
+3. **Transcribe + analyze:** independent audio/video stages, potentially parallel later.
+4. **Index:** combine observations and speech into segments, FTS and embeddings.
+5. **Group:** cluster events by time, context and content.
+6. **Plan:** director selects stories/excerpts; music and editing agents propose sound/treatment; orchestration validates and saves a complete plan.
+7. **Preview:** reduced MP4 in S3, technical checks and reviewer evaluation. At most two creative revision cycles, each with a new version. Export uses full-quality originals.
+8. **Chat review:** targeted changes, a new version and preview.
 
-analyze_asset выполняет известную цепочку подготовки/анализа/индексации и возобновляется с checkpoint. build_project получает снимок списка asset_id; если анализ ещё идёт, под действующим lease_token возвращает задание в queued, переносит available_at, очищает аренду и компенсирует увеличение attempt при захвате. Плановое ожидание не расходует бюджет ошибок. Ошибка исходника явно завершает ожидание ошибкой; новые загрузки включаются новой командой сборки. Промежуточная группировка сохраняется в checkpoint, канонический состав фильма — в плане версии.
+`analyze_asset` resumes preparation/analysis/indexing from checkpoints. `build_project` captures an asset-ID snapshot. If analysis is pending, the current lease holder requeues the job, moves `available_at`, clears the lease and compensates the claim's attempt increment. Planned waiting does not consume the failure budget. Failed sources fail the wait explicitly; later uploads require a new build command. Grouping stays in checkpoints; canonical film contents stay in the version plan.
 
-PySceneDetect используется как дополнительный сигнал о смене кадра. Для длинных непрерывных записей нужны окна и уточнение границ действий. Начальные параметры эксперимента: окна 30 секунд с перекрытием 3 секунды; параметры уточняются на тестовых материалах. Повторы из перекрытий объединяются по исходнику, времени и содержанию.
+PySceneDetect supplies an additional shot-change signal. Continuous footage needs windows and action-boundary refinement. Initial experimental windows are 30 seconds with 3-second overlap, adjusted using evaluation footage. Merge overlap duplicates by source, time and content.
 
-## 9. Протокол чата и версий
+## 9. Chat and versions
 
-Клиент отправляет текст вместе с `project_id`, необязательным `story_id`, `context_version_id`, `playback_us` и уникальным `request_id`. Метка проигрывателя относится именно к показанной версии. Backend переводит её в исходник через план, учитывая переходы и изменение скорости.
+The client sends text, `project_id`, optional `story_id`, `context_version_id`, `playback_us` and unique `request_id`. Playback time belongs to the displayed version. The backend maps it to source time through the plan, accounting for transitions and speed.
 
-API одной транзакцией сохраняет сообщение и apply_message. request_id вместе с отпечатком параметров защищает повтор: тот же запрос возвращает прежний результат, другой текст с тем же ID — конфликт. Worker при публикации блокирует историю, проверяет базовую версию и lease_token, назначает revision и одной транзакцией сохраняет версию/текущий указатель/задание рендера.
+The API atomically saves a message and `apply_message` job. Request ID plus parameter fingerprint prevents duplicates: identical requests return the prior result; changed content under the same ID conflicts. Publication locks the story, checks base version and lease, assigns a revision and commits the version, current pointer and render job together.
 
-Модель получает релевантную переписку, текущий план, ограничения и найденные кандидаты. Ей доступны ограниченные инструменты поиска и изменения плана. Произвольные команды оболочки не нужны.
-
-Пример операции после разрешения слов «убери дорогу» в конкретное вхождение:
+The model receives relevant conversation, current plan, constraints and retrieved candidates. It uses limited search/plan tools, not arbitrary shell commands. After resolving “remove the road scene” to a clip occurrence:
 
 ```json
 {
   "base_version_id": "version_3",
   "operations": [{"type": "remove_clip", "clip_id": "occurrence_9"}],
-  "summary": "Убрана длинная сцена дороги"
+  "summary": "Removed the long road scene"
 }
 ```
 
-Backend проверяет JSON и смысл операции, строит полный новый план, валидирует его, создаёт `edit_version` и атомарно меняет `stories.current_version_id`, только если базовая версия всё ещё актуальна. Устаревшая команда перепланируется или явно предлагается как ответвление. Повторный запрос с тем же `request_id` не создаёт вторую версию.
+The backend validates syntax and semantics, builds and checks the complete new plan, creates an edit version and updates the current pointer only if the base is still current. Stale commands are replanned or explicitly offered as a branch. Repeating a request ID creates no second version.
 
-Результат рендера старой версии остаётся доступен в истории, но не переключает текущую версию. Пользователь видит реальные статусы «анализ», «сборка», «готово», «ошибка»; текст «готово» отправляется после проверки существования и воспроизведения файла.
+A render of an older version remains in history but cannot switch the current version. Status reflects actual analysis, rendering, readiness or failure. “Ready” is sent only after confirming the file exists and decodes.
 
-## 10. Минимальный API
+## 10. Target API
 
-| Метод | Маршрут | Назначение |
+These routes describe the target design; consult the implementation for shipped endpoints.
+
+| Method | Route | Purpose |
 |---|---|---|
-| POST | `/projects` | Создать проект |
-| POST | `/projects/{id}/uploads` | Начать загрузку оригинала, вернуть ID сессии |
-| POST | `/uploads/{id}/part-urls` | Выдать временные ссылки на нужные части |
-| GET | `/uploads/{id}` | Статус, сверенные части, результат импорта |
-| POST | `/uploads/{id}/complete` | Поставить завершение multipart и проверку в очередь; ответ 202 |
-| POST | `/uploads/{id}/abort` | Запросить прерывание загрузки и очистку; ответ 202 |
-| POST | `/projects/{id}/build` | Сборка по снимку исходников |
-| GET | `/projects/{id}/stories` | Карточки историй с пагинацией |
-| GET | `/stories/{id}` | История и текущая версия |
-| GET | `/stories/{id}/versions` | История изменений с пагинацией |
-| POST | `/projects/{id}/messages` | Сообщение в контексте проекта или истории |
-| POST | `/stories/{id}/exports` | Экспорт выбранной версии |
-| POST | `/jobs/{id}/cancel` | Запросить отмену |
-| GET | `/projects/{id}/events` | Поток SSE для статусов и ответов |
-| GET | `/renders/{id}/media` | Подписанный URL готового объекта и срок действия; S3 обслуживает HTTP Range |
-| DELETE | `/projects/{id}` | Асинхронное удаление с очисткой S3; ответ 202 |
+| POST | `/projects` | Create project |
+| POST | `/projects/{id}/uploads` | Start source upload and return session ID |
+| POST | `/uploads/{id}/part-urls` | Issue temporary part URLs |
+| GET | `/uploads/{id}` | Session, verified parts and import result |
+| POST | `/uploads/{id}/complete` | Queue multipart completion/verification, return 202 |
+| POST | `/uploads/{id}/abort` | Request abort/cleanup, return 202 |
+| POST | `/projects/{id}/build` | Build from source snapshot |
+| GET | `/projects/{id}/stories` | Paginated story cards |
+| GET | `/stories/{id}` | Story and current version |
+| GET | `/stories/{id}/versions` | Paginated version history |
+| POST | `/projects/{id}/messages` | Project/story message |
+| POST | `/stories/{id}/exports` | Export selected version |
+| POST | `/jobs/{id}/cancel` | Request cancellation |
+| GET | `/projects/{id}/events` | SSE status and replies |
+| GET | `/renders/{id}/media` | Expiring signed URL, with S3 Range reads |
+| DELETE | `/projects/{id}` | Asynchronous S3 cleanup/deletion, return 202 |
 
-Каждый маршрут проходит аутентификацию. API самостоятельно определяет bucket и ключ по ID объекта; клиент не может запросить произвольный S3-ключ. Аналогичный маршрут выдаёт ссылки на обложки. Выдача URL не делает bucket публичным. Endpoint выдачи ссылок возвращает `Cache-Control: no-store`, а подписанные URL не попадают в обычные журналы приложения.
+All routes authenticate. The API derives bucket/key from an authorized object ID; clients cannot request arbitrary S3 keys. Covers follow the same rule. Issuing a URL does not make the bucket public. Link responses use `Cache-Control: no-store`; signed URLs are excluded from normal logs.
 
-Асинхронные изменяющие команды принимают request_id и проверяют отпечаток параметров. Для загрузок/сообщений это отдельные поля, для остальных — jobs.dedupe_key и отпечаток input. Повтор ID с другим содержимым возвращает конфликт. Пагинация использует курсор времени/UUID и ограниченный размер страницы.
+Asynchronous commands accept a request ID and fingerprint. Uploads/messages have dedicated fields; other jobs use `dedupe_key` and input fingerprint. Reuse with different content conflicts. Pagination uses time/UUID cursors and bounded page sizes.
 
-## 11. Несколько worker, очередь и кэш
+## 11. Workers, queue and cache
 
-jobs в PostgreSQL — постоянная очередь. Примеры захвата, heartbeat и возврата аренд находятся в worker-and-search.sql. API и worker подключаются к общей БД с разных хостов; локальные рабочие каталоги не разделяются между машинами.
+PostgreSQL `jobs` is a durable queue. Claim, heartbeat and lease-recovery examples are in `worker-and-search.sql`. Different hosts share the database, not scratch directories.
 
-1. Worker выбирает свои очереди (io/ai/render) короткой транзакцией с FOR UPDATE SKIP LOCKED. Получает новый lease_token и ограниченный срок аренды.
-2. Периодически продлевает аренду коротким запросом. Время берём у PostgreSQL. Потеря аренды запрещает публикацию: старый процесс не должен перезаписать новую попытку.
-3. Результат, завершение задания и следующие задания записываются одной транзакцией. Доставка допускает повторы; UNIQUE/dedupe_key и проверка lease_token защищают публикацию. Exactly once для внешних AI/S3-вызовов не обещаем.
-4. Истёкшие аренды возвращаются в очередь с задержкой либо завершаются failed при исчерпании попыток. cancel_requested останавливает дочерние процессы и запрещает публикацию частичного результата.
-5. Известные процессы — verify_upload, analyze_asset, build_project, apply_message, render_version, reconcile_storage, delete_project. Checkpoint хранит этап, отпечатки и ID готовых результатов. Универсальный граф зависимостей не нужен.
-6. Рендер и AI получают отдельные пулы процессов/слоты при росте нагрузки. До увеличения числа экземпляров рассчитываем общий параллелизм и лимиты провайдера: локальный лимит одного worker не является глобальным.
-7. Вводим ограничения размера загрузки и числа активных задач на проект/владельца. При росте числа пользователей добавляем справедливое распределение и общий лимитер; измеряем возраст очереди по владельцам.
+1. Workers claim their io/ai/render queues in short `FOR UPDATE SKIP LOCKED` transactions, receiving a new `lease_token` and bounded lease.
+2. Heartbeats extend leases using database time. Lost leases prohibit publication by stale processes.
+3. Result, job completion and next jobs commit together. Delivery is at least once; uniqueness, dedupe keys and fencing protect publication. External AI/S3 calls are not promised exactly once.
+4. Expired leases requeue with delay or fail after the attempt budget. Cancellation stops subprocesses and prevents partial publication.
+5. Known workflows include verify_upload, analyze_asset, build_project, apply_message, render_version, reconcile_storage and delete_project. Checkpoints store stage, fingerprints and result IDs; no generic dependency graph is required.
+6. Separate AI/render pools as load grows. Calculate total concurrency and provider limits before adding workers: a process-local limit is not global.
+7. Limit upload size and active jobs per owner/project. Add fair scheduling and a shared limiter when multiple users require them; measure queue age by owner.
 
-Сверка S3/БД и очистка выполняются worker. На отказ NAS отвечаем повтором с задержкой, не удалением записи. Scratch-каталог привязан к заданию/попытке, имеет лимит и очищается с учётом активных аренд. Сетевые операции и FFmpeg никогда не удерживают транзакцию БД.
+Workers reconcile S3/database state and perform cleanup. NAS outages cause delayed retries, not record deletion. Scratch cleanup respects current leases. Network operations and FFmpeg never hold database transactions.
 
-Ключ кэша включает хеш входа, диапазон, версию этапа, модель, настройки и промпт; рендер — ещё план/профиль/движок. Изменение музыки не запускает анализ видео. Кэш используется только при доступном проверенном S3-объекте.
+Cache keys include input hash, range, stage version, model, settings and prompt; rendering also includes plan/profile/engine. Changing music does not rerun video analysis. Cached media is used only if its verified S3 object is available.
 
-Логи содержат request_id/project_id/job_id, attempt и trace_id, но не секреты, подписанные URL и пользовательские медиа. OpenTelemetry связывает запрос, постановку задания, этапы worker и обращения к зависимостям. В ai_calls сохраняем фактические токены и время; неизвестное остаётся NULL. Оценка стоимости требует версии тарифов.
+Logs correlate request/project/job, attempt and trace, excluding secrets, signed URLs and media. OpenTelemetry connects enqueueing, stages and dependency calls. `ai_calls` stores measured tokens/time; unknown values remain NULL. Cost estimates require a pricing version.
 
-Prometheus собирает задержки, ошибки, возраст очередей, аренды, прогресс рендера, ресурсы PostgreSQL/NAS и расход AI; Grafana показывает состояние, Alertmanager доставляет сгруппированные алерты. ID проектов/пользователей/заданий остаются в закрытых логах и трассах, не в labels метрик. На одном хосте логи ограничиваются ротацией; централизованные Loki и Collector/Tempo подключаются при необходимости. Отказ телеметрии не блокирует обработку. Условия алертов, health endpoints, хранение и стартовые цели сервиса описаны в quality-and-operations.md.
+Prometheus records latency, errors, queue age, leases, rendering progress, database/NAS resources and AI usage. Grafana displays them; Alertmanager routes grouped alerts. User/project/job IDs belong in private logs/traces, not metric labels. Rotate local logs; add Loki and Collector/Tempo when useful. Telemetry failure must not block editing. Detailed targets and alert conditions are in [quality and operations](quality-and-operations.md).
 
-## 12. Валидация, тесты и допуск к выпуску
+## 12. Validation, tests and release gates
 
-Полный контракт: [Валидация, мониторинг и тестирование](quality-and-operations.md). Проверки добавляются вместе с каждым этапом разработки; только технически проверенный объект может получить статус ready.
+Add checks alongside each stage. A result becomes ready only after technical verification. Validation boundaries are request/access → upload/hash → analysis/embeddings → tools → plan → render → publication. Reports record validator version, input fingerprint, output hash when applicable and findings. Publication matches the report to the exact version/object and current lease.
 
-Обязательные границы валидации: запрос/доступ → загрузка и хеш → анализ и эмбеддинги → инструменты агента → монтажный план → рендер → публикация. Отчёт содержит версию валидатора, fingerprint входа, SHA-256 результата при наличии файла и замечания. Проверка публикации связывает отчёт с точной версией, объектом и действующей арендой; успешный ответ модели не заменяет проверку.
+Test owner/project substitution, cross-project vector search, changed payloads under reused IDs and incompatible profiles. Real concurrent PostgreSQL connections exercise SKIP LOCKED, expiry, stale publication, simultaneous edits and deletion/publication races. Compare ANN with exact search and determine capacity limits from measurements.
 
-Дополнительно для серверной схемы: подмена владельца/project_id, поиск чужих векторов, повтор request_id с иным содержимым, несовместимые профили эмбеддингов. На настоящем PostgreSQL с несколькими соединениями проверяем SKIP LOCKED, истечение аренды, публикацию старым worker, две одновременные правки и удаление во время публикации. HNSW сравниваем с точным поиском по recall@k; численные пределы нагрузки определяем тестами.
+Required media checks include source bounds, project ownership, pinned/excluded moments, transition-aware duration, speech boundaries, A/V sync and export from saved versions. Fixtures include portrait footage, VFR, silent clips, continuous recordings, duplicates, uncertain dates and mixed events. Artistic quality needs human evaluation.
 
-Обязательные технические проверки: валидность диапазонов, принадлежность файлов проекту, соблюдение закреплений/исключений, длительность с учётом переходов, отсутствие обрыва речи на выбранных границах, синхронизация звука и изображения, воспроизводимый экспорт из сохранённой версии.
+Storage tests cover interrupted multipart/resume, repeated complete, crashes between S3 writes and DB commits, wrong size/hash, NAS outage, full scratch, expired playback URLs, cancellation during upload and backup restoration. Test the pinned SeaweedFS build's S3/CORS/signing/Range behavior; SQL tests cannot substitute for it.
 
-Тестовый набор должен включать вертикальные видео, переменную частоту кадров, отсутствие звука, длинные непрерывные записи, дубли, неточные даты и смешанные события. Проверка содержания проводится на человеческой оценке: автоматический валидатор не может гарантировать художественное качество.
+Use pytest, Hypothesis, Vitest, Playwright and k6. Integrations use real PostgreSQL/pgvector, SeaweedFS and FFmpeg; routine CI mocks AI and separate bounded runs evaluate live models. Monitoring rules need promtool tests and delivery checks.
 
-Хранилище проверяем отдельно: продолжение multipart после обрыва, повтор `complete`, падение между записью в S3 и фиксацией в БД, неверный размер/хеш, отказ NAS, заполненный scratch-диск, истечение URL во время просмотра, отмена с активной загрузкой и восстановление из резервной копии. На закреплённой версии SeaweedFS выполняем интеграционные проверки S3, CORS, подписанных ссылок и Range; SQL-проверки их не заменяют.
+Target release floors: backend ≥80% lines /75% branches; critical authorization, publication, leases, versions, plans and budgets ≥90% lines/branches; frontend ≥80% lines /70% branches. These are design targets, not measured coverage. Required scenarios apply regardless of percentages. Agent evaluation uses an independent holdout for instruction compliance, quality, time and cost; reviewer scores are not the sole criterion.
 
-Стратегия: pytest для backend, Hypothesis для диапазонов и состояний, Vitest для frontend, Playwright для сценария загрузка → фильм → чат → экспорт, k6 для нагрузки. В интеграциях работают настоящий PostgreSQL/pgvector, SeaweedFS и FFmpeg; AI подменяется в обычном CI и отдельно проверяется на ограниченных реальных прогонах. Правила мониторинга получают тесты promtool и проверку доставки алертов.
+CI blocks release on broken invariants, regressions, missing coverage or failed migrations. Pre-release checks include load, old-version playback, alert delivery and independent backup restoration. The early 31-condition PGlite run is documented separately in [validation](validation.md).
 
-Начальные пороги выпуска: backend ≥ 80% строк / 75% ветвей; критическая логика доступа, публикации, аренд, версий, плана и бюджета ≥ 90% строк и ветвей; frontend ≥ 80% строк / 70% ветвей. Это цели будущей реализации, не измеренное покрытие. Критические сценарии обязательны независимо от процента. Для агентов используется отдельный контрольный набор с оценкой соблюдения пожеланий, качества, времени и стоимости; оценка рецензента не является единственным критерием.
+## 13. Scale from measurements
 
-CI блокирует выпуск при нарушении инвариантов, регрессии, недостаточном покрытии или неуспешной миграции. Перед выпуском дополнительно проверяются нагрузка, воспроизведение сохранённых версий, доставка алерта и восстановление проекта из независимого бэкапа. Ранее выполнены 31 условие в одном соединении PGlite; ограничения этих результатов описаны в validation.md.
-
-## 13. Масштабирование по измерениям
-
-| Нагрузка | Следующий шаг |
+| Bottleneck | Next step |
 |---|---|
-| Не хватает HTTP/SSE-соединений | Дополнительные API за балансировщиком, общий доступ к состоянию |
-| Долго ждём анализ или рендер | Worker нужной очереди на отдельных CPU/GPU-хостах |
-| Поиск стал медленным | План запроса, настройка HNSW и фильтров, проверка recall; затем разбиение данных |
-| Поиск конкурирует с транзакциями | Бюджеты ресурсов; при необходимости отдельный поисковый сервис с журналом синхронизации |
-| Очередь перегружает PostgreSQL | Брокер + transactional outbox; PostgreSQL сохраняет состояние заданий |
-| Не хватает ёмкости/доступности NAS | Расширение/репликация SeaweedFS, независимый бэкап и проверенный failover |
-| Нужен совместный доступ | project_members и роли поверх users/owner_id |
+| HTTP/SSE capacity | More API instances behind a load balancer with shared state |
+| Analysis/render wait | Workers for the affected queue on CPU/GPU hosts |
+| Slow search | Query plans, HNSW/filter tuning and recall checks, then partitioning |
+| Search competes with transactions | Resource budgets, then a separate search service with a synchronization log if needed |
+| Queue overloads PostgreSQL | Broker plus transactional outbox; PostgreSQL retains job state |
+| NAS capacity/availability | SeaweedFS expansion/replication, independent backup and tested failover |
+| Collaboration | project_members and roles over users/owner_id |
 
-У каждого процесса ограниченный пул соединений; сумма укладывается в бюджет PostgreSQL. PgBouncer добавляем при необходимости и проверяем совместимость режима пула. Исчезновение процесса API/worker не теряет сохранённое состояние.
+Bound connection pools globally. Add PgBouncer when needed and verify pool-mode compatibility. Losing an API/worker process must not lose saved state. Multiple application instances do not make one database or NAS highly available. Do not add Redis, Kubernetes, a separate vector database or sharding without a measured need.
 
-Готовность API/worker к нескольким экземплярам не обеспечивает отказоустойчивость одиночной БД и NAS — это отдельные задачи развёртывания. Redis, Kubernetes, отдельную векторную БД и шардирование в первую установку без измеренной причины не включаем.
+## 14. Implementation sequence
 
-## 14. Порядок реализации
+1. PostgreSQL/pgvector, private S3, identity/ownership and resumable upload, with access/import checks, logs, metrics and integrations.
+2. Leased jobs, validated FFmpeg rendering and S3 publication, with race/media tests, dashboards and alert delivery.
+3. Video/speech catalog and retrieval, with labeled ground truth, relevance and ANN recall evaluation.
+4. Event/story planning and first versions, creative agents, compatible presets, bounded preview review, budgets and tool audit.
+5. Chat operations, constraints and rollback, with idempotency, versioning and end-to-end tests.
+6. Stories interface, fault recovery and evaluation on real trips, gated by CI, load, restoration and operating limits.
 
-1. PostgreSQL + pgvector, SeaweedFS на своём сервере/NAS, идентичность и владельцы, загрузка с продолжением; валидаторы доступа/импорта, логи, метрики и первые интеграционные тесты.
-2. Задания с арендой, проверяемый FFmpeg-рендер фиксированного плана и публикация результата в S3; тесты гонок и медиа, дашборды, алерты и проверка доставки.
-3. Каталогизация видео/речи и поиск моментов; контрольная разметка, оценка релевантности и ANN recall.
-4. Автоматическое создание событий, историй и первой версии: режиссёр, музыкальный и монтажный агенты, стартовый каталог совместимых эффектов, ограниченный цикл оценки превью; бюджет, журнал инструментов и контрольный AI-набор.
-5. Чат с операциями над планом, ограничениями и откатом; проверки идемпотентности, версий и сквозных сценариев.
-6. Интерфейс «Истории», устойчивость к сбоям и оценка качества на реальных поездках; допуск к выпуску по CI, нагрузке, восстановлению и эксплуатационным пределам.
+The first complete user scenario uploads a collection, produces one or more films, accepts requests such as “shorter,” “remove this” and “keep this whole,” and revisits earlier versions without manual editing.
 
-Критерий первого готового сценария: загрузить подборку, получить один или несколько фильмов, изменить их сообщениями «короче», «убери», «оставь целиком» и вернуться к предыдущей версии без ручного монтажа.
+## References
 
-## Источники
-
-- [SeaweedFS: запуск на одном узле и в контейнере](https://github.com/seaweedfs/seaweedfs)
-- [SeaweedFS: совместимость S3, multipart, подписанные ссылки](https://github.com/seaweedfs/seaweedfs/wiki/Amazon-S3-API)
-- [Gemini 3.8 Flash: видео, function calling, structured outputs](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)
+- [SeaweedFS deployment](https://github.com/seaweedfs/seaweedfs)
+- [SeaweedFS S3 compatibility](https://github.com/seaweedfs/seaweedfs/wiki/Amazon-S3-API)
+- [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)
 - [Gemini video understanding](https://ai.google.dev/gemini-api/docs/video-understanding)
-- [Gemini structured outputs и необходимость прикладной валидации](https://ai.google.dev/gemini-api/docs/structured-output)
-- [Gemini embeddings: модели, размерности, нормализация и режимы поиска](https://ai.google.dev/gemini-api/docs/embeddings)
-- [Gemini Files API: временное хранение загруженных файлов](https://ai.google.dev/gemini-api/docs/files)
-- [faster-whisper: пословные таймкоды](https://github.com/SYSTRAN/faster-whisper)
-- [PostgreSQL: SELECT и SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
-- [PostgreSQL: резервирование](https://www.postgresql.org/docs/current/backup.html)
+- [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output)
+- [Gemini embeddings](https://ai.google.dev/gemini-api/docs/embeddings)
+- [Gemini Files API](https://ai.google.dev/gemini-api/docs/files)
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+- [PostgreSQL SELECT / SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
+- [PostgreSQL backup](https://www.postgresql.org/docs/current/backup.html)
 - [pgvector](https://github.com/pgvector/pgvector)
 - [FFmpeg filters](https://www.ffmpeg.org/ffmpeg-filters.html)
 - [PySceneDetect](https://www.scenedetect.com/docs/latest/)

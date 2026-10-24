@@ -1,35 +1,35 @@
-# Своя LLM и резервный GPU на Vast.ai
+# Self-hosted LLMs and a backup GPU on Vast.ai
 
-VMerger может обращаться к внешнему API, к модели на своём GPU или к модели на арендованном GPU. Для совместимого сервера меняются `base_url`, модель и имя переменной с ключом; агенты и монтажный pipeline остаются общими. NAS может хранить медиа, а inference выполнять отдельная машина.
+VMerger can call a hosted API, a model on your own GPU, or a model on a rented GPU. A compatible server only requires a different `base_url`, model and credential variable; agents and the editing pipeline remain shared. A NAS can store media while a separate machine performs inference.
 
-**Реализовано:** подключение совместимого endpoint и последовательный fallback для четырёх творческих ролей на уже работающие серверы. **Проектируется:** автоматическая аренда GPU, ожидание загрузки модели и освобождение аренды. В репозитории нет клиента управления Vast.ai, и приложение не создаёт платные ресурсы.
+**Implemented:** compatible endpoints and ordered creative-role fallback to already running servers. **Planned:** automatic GPU rental, model-startup waiting and rental release. The repository has no Vast.ai infrastructure-management client, and the application creates no paid resources.
 
-## Как соединяются компоненты
+## Connections
 
 ```mermaid
 flowchart TB
-    U["Браузер: чат и результат"] --> API["VMerger на своём сервере"]
+    U["Browser: chat and results"] --> API["VMerger on your server"]
     API --> DB[("PostgreSQL + pgvector")]
-    API --> S3[("S3 на сервере / NAS")]
-    DB --> W["Worker и AI router"]
-    W --> P["1. Основной API / LLM"]
-    P -->|"Сеть, timeout, 429 или 5xx"| L["2. Своя LLM на GPU"]
-    L -->|"Временная недоступность"| T["3. SSH-туннель со своего сервера"]
-    T --> V["Заранее запущенный Vast GPU + vLLM"]
-    P --> C["Проверка JSON и монтажного плана"]
+    API --> S3[("S3 on your server / NAS")]
+    DB --> W["Worker and AI router"]
+    W --> P["1. Primary API / LLM"]
+    P -->|"Network error, timeout, 429 or 5xx"| L["2. Your GPU and LLM"]
+    L -->|"Transient unavailability"| T["3. SSH tunnel from your server"]
+    T --> V["Already running Vast GPU + vLLM"]
+    P --> C["JSON and edit-plan validation"]
     L --> C
     V --> C
     C --> F["FFmpeg worker"]
     F --> S3
 ```
 
-Запросы к моделям идут от worker. Браузер не получает ключи inference-сервисов. Оригиналы и готовые ролики остаются в S3; при использовании удалённого GPU туда уходят входные данные выбранных ролей, например текст сцен и запрос пользователя. SSH шифрует соединение, но сам inference выполняется на арендованном оборудовании.
+Workers send model requests. The browser receives no inference credentials. Originals and completed films stay in S3; remote GPUs receive the selected roles' inputs, such as scene text and user requests. SSH encrypts the connection, but inference still executes on rented hardware.
 
-## Запуск модели
+## Serving a model
 
-В качестве сервера можно использовать **vLLM** с Chat Completions API. Выберите совместимую instruct/chat-модель, проверьте её лицензию, поддержку JSON и размер контекста. Версию vLLM и ревизию весов фиксируйте в своей конфигурации развёртывания. GPU/VRAM подбираются под веса, контекст и параллелизм, а не только под число параметров.
+**vLLM** can provide the compatible Chat Completions server. Choose a supported instruct/chat model and check its license, JSON support and context capacity. Pin the vLLM version and weight revision in your deployment. GPU memory depends on weights, context and concurrency, not parameter count alone.
 
-На Linux GPU-машине с установленным vLLM, совместимым CUDA runtime и заданными `MODEL_ID` и секретом `VLLM_API_KEY`:
+On a Linux GPU machine with vLLM, a compatible CUDA runtime, `MODEL_ID` and secret `VLLM_API_KEY` configured:
 
 ```sh
 vllm serve "$MODEL_ID" \
@@ -37,17 +37,17 @@ vllm serve "$MODEL_ID" \
   --host 127.0.0.1 --port 8000
 ```
 
-В конфигурации VMerger используйте `model = "vmerger-planner"`, `token_parameter = "max_tokens"`. Ключ из `VLLM_API_KEY` должен совпадать со значением `OWN_LLM_KEY` или `VAST_LLM_KEY` на сервере VMerger. Эти ключи относятся к inference, **не к API аренды Vast.ai**. Если endpoint поддерживает только JSON object, задайте `response_format = "json_object"`; локальная проверка Pydantic обязательна в обоих режимах.
+Configure VMerger with `model = "vmerger-planner"` and `token_parameter = "max_tokens"`. Its `OWN_LLM_KEY` or `VAST_LLM_KEY` must match the server's `VLLM_API_KEY`. These are **inference keys, not Vast.ai rental API keys**. If the endpoint only supports JSON objects, set `response_format = "json_object"`; local Pydantic validation remains mandatory in either mode.
 
-Порт vLLM оставьте за SSH/VPN или аутентифицирующим прокси. Его `--api-key`/`VLLM_API_KEY` не защищает все маршруты HTTP-сервера. Команда, API и ограничение аутентификации описаны в [официальном руководстве vLLM](https://docs.vllm.ai/en/stable/serving/online_serving/openai_compatible_server/).
+Keep vLLM behind SSH/VPN or an authenticating proxy. `--api-key`/`VLLM_API_KEY` does not protect every HTTP route. Commands, API support and authentication limits are documented in the [official vLLM guide](https://docs.vllm.ai/en/stable/serving/online_serving/openai_compatible_server/).
 
-Текстовая LLM подходит для `director`, `music`, `editor`, `reviewer`. Для `analyst` нужна vision-модель, принимающая JPEG; текущий совместимый адаптер не передаёт звук. Для `embedding` нужен отдельный совместимый embedding endpoint с 768 значениями, который задаётся явно. Таким образом, полностью локальная установка возможна, но один текстовый endpoint не заменяет все три возможности.
+Text LLMs support director, music, editor and reviewer roles. The analyst needs a vision model accepting JPEGs; the current compatible adapter sends no audio. Embeddings need an explicitly configured embedding endpoint returning 768 values. A fully local deployment is possible, but one text-only endpoint does not provide all three capabilities.
 
-## Vast.ai через свой сервер
+## Connecting Vast.ai through your server
 
-1. В своей учётной записи выберите GPU с подходящей памятью, зафиксируйте образ/версию runtime, задайте диск под веса и добавьте SSH public key. Для первоначальной проверки используйте заранее запущенный экземпляр. Выбор модели и оценка качества требуют отдельного прогона на ваших материалах.
-2. Запустите vLLM внутри GPU-окружения, как выше. Возьмите SSH host, port и user из карточки экземпляра; адрес inference не нужно публиковать в Интернет.
-3. На сервере VMerger откройте туннель. Команда ниже рассчитана на **нативный worker на той же машине**, где запущен SSH:
+1. In your account, select sufficient GPU memory, pin the runtime image/version, allocate disk for weights and add an SSH public key. Begin with an already running instance. Model selection and quality need separate evaluation on your material.
+2. Start vLLM inside the GPU environment as above. Get SSH host, port and user from the instance card. The inference port need not be public.
+3. Open a tunnel from the VMerger server. This example assumes a **native worker on the same host as the SSH client**:
 
 ```sh
 ssh -N \
@@ -56,20 +56,20 @@ ssh -N \
   -p <SSH_PORT> <SSH_USER>@<SSH_HOST>
 ```
 
-Проверьте fingerprint SSH-хоста при первом подключении. Для постоянной работы туннель должен запускаться сервисом с перезапуском после обрыва. В нативном VMerger `base_url = "http://127.0.0.1:18000/v1"`. Механика подключения и forwarding описаны в [SSH-документации Vast.ai](https://docs.vast.ai/guides/instances/connect/ssh).
+Verify the SSH host fingerprint on first connection. For persistent operation, manage the tunnel as a service that restarts after interruption. Native VMerger uses `base_url = "http://127.0.0.1:18000/v1"`. See [Vast.ai SSH and forwarding](https://docs.vast.ai/guides/instances/connect/ssh).
 
-**В Docker Compose** loopback принадлежит контейнеру. Запустите SSH-клиент отдельным сервисом `vast-tunnel` в той же приватной Docker-сети, что API/worker; внутри него используйте `-g -L 0.0.0.0:18000:127.0.0.1:8000`, без публикации `ports` на хост. Смонтируйте выделенный SSH key и проверенный `known_hosts` только в этот сервис. Тогда URL — `http://vast-tunnel:18000/v1`. Аналогичный `own-gpu-tunnel` соединяет worker с собственным GPU. Эти сервисы нужно добавить в своё развёртывание: базовый Compose их автоматически не создаёт.
+**In Docker Compose**, loopback belongs to each container. Run an SSH client service named `vast-tunnel` on the API/worker's private Docker network. Inside it, use `-g -L 0.0.0.0:18000:127.0.0.1:8000` without publishing host `ports`. Mount a dedicated SSH key and verified `known_hosts` only into that service. The application URL is then `http://vast-tunnel:18000/v1`. An equivalent `own-gpu-tunnel` reaches your own GPU. Add these services to your deployment; the base Compose file does not create them.
 
-Перед включением маршрута проверьте из сети worker авторизованный `GET /v1/models`, затем небольшой `POST /v1/chat/completions` с выбранной моделью и JSON-схемой. Список моделей и открытый TCP-порт сами по себе не доказывают, что модель загружена и принимает нужный формат. Такие проверки выполняются владельцем; текущая локальная валидация проекта использует HTTP fixtures.
+Before activating the route, check an authenticated `GET /v1/models` from the worker network, followed by a small `POST /v1/chat/completions` using the selected model and JSON schema. A model list or open TCP port alone does not establish inference readiness or schema compatibility. The owner performs these live checks; current project validation uses HTTP fixtures.
 
-## Настройка маршрутов и резервов
+## Routes and backups
 
-Полный шаблон: [config/ai.hybrid.example.toml](../config/ai.hybrid.example.toml). Он показывает внешний API → свой GPU → Vast GPU. Замените адреса и модели, сохраните рабочий файл как `config/ai.toml` либо задайте `AI_CONFIG_FILE=config/ai.hybrid.example.toml`. Добавьте указанные ключи в `.env` и пересоздайте API/worker после изменения окружения.
+The complete [hybrid example](../config/ai.hybrid.example.toml) demonstrates hosted API → owned GPU → Vast GPU. Replace endpoints/models and save it as `config/ai.toml`, or set `AI_CONFIG_FILE=config/ai.hybrid.example.toml`. Add the referenced credentials to `.env`; recreate API/worker after environment changes.
 
-Чтобы сделать собственную LLM основной, укажите `own_gpu` в `[default]`, модель `vmerger-planner`, а в каждом списке резервов оставьте только `vast_gpu`. Для полного отсутствия внешних API дополнительно задайте собственные vision- и embedding-маршруты. В шаблоне они пока указывают на внешний сервис.
+To make your LLM primary, set `[default]` to `own_gpu` and model `vmerger-planner`, leaving only `vast_gpu` in each backup list. For a fully self-hosted setup, configure your own vision and embedding routes too; the example still points those roles at a hosted endpoint.
 
 ```toml
-# Добавляется к конфигурации, где own_gpu и vast_gpu уже определены.
+# Both providers must already be defined in the configuration.
 [default]
 provider = "own_gpu"
 model = "vmerger-planner"
@@ -81,37 +81,37 @@ editor = [{provider = "vast_gpu", model = "vmerger-planner"}]
 reviewer = [{provider = "vast_gpu", model = "vmerger-planner"}]
 ```
 
-Для каждого вызова проверяется основной маршрут, затем максимум два резерва по порядку. Переключение допускают только сетевые сбои, timeout и HTTP 429/5xx. Ошибки ключа, 4xx кроме 429, отказ модели, обрезанный ответ, некорректный JSON и ошибки БД останавливают вызов. Отказ reviewer в утверждении плана также остаётся отказом; другая модель не вызывается в поисках одобрения.
+Each call tries its primary, then at most two ordered backups. Only network failures, timeouts and HTTP 429/5xx trigger switching. Missing credentials, other 4xx, refusals, truncation, invalid JSON and database errors stop the call. A valid reviewer rejection stays a rejection; another model is not asked to provide approval.
 
-Пустой список означает отсутствие fallback. Для `analyst` резерв пока запрещён из-за разных возможностей видео/аудио; для `embedding` — из-за несовместимых векторных пространств. Их изменение выполняется явно, при смене embedding-профиля нужна переиндексация. При исчерпании временно недоступных резервов ошибку получает существующий механизм retry задания. Каждый новый вызов снова начинает с основного маршрута: общего circuit breaker пока нет.
+An empty list disables fallback. Analyst fallback is currently prohibited because video/audio capabilities differ. Embedding fallback is prohibited because vector spaces may be incompatible. Change those routes explicitly; a new embedding profile requires reindexing. Exhausted transient backups return a retryable error to the existing job mechanism. Every new call starts at its primary; there is no shared circuit breaker.
 
-## Наблюдаемость
+## Observability
 
-Вкладка **Качество → AI-команда** показывает основные маршруты, порядок резервов и наличие их ключей. Это конфигурация, а не проверка доступности. `ai_calls` сохраняет отдельную строку для каждой попытки: фактический provider/model, роль, статус, длительность и известные токены. Ошибка основного API остаётся в аудите, даже если резерв успешно ответил. График задержек считает попытки, а существующий счётчик ошибок провайдера включает неудачные обращения перед успешным резервом; это не число проваленных пользовательских заданий.
+**Quality and agents → AI team** displays primary routes, backup order and credential availability. This is configuration, not a health probe. Each `ai_calls` row records the actual provider/model, role, status, duration and known tokens for one attempt. Failed primary attempts remain even when a backup succeeds. Latency charts count attempts, and the provider-error counter includes failures before successful backup; neither is a count of failed user jobs.
 
-Для будущего контроллера нужны отдельные метрики: доля заданий, восстановленных резервом; частота переключений по причинам; p95 загрузки модели; доля успешных запусков GPU; время простаивания и стоимость аренды. Их пока нет в dashboard: потребуются идентификатор логического вызова, события переключения и данные биллинга.
+A future controller needs separate measurements for backup-recovered jobs, switch frequency/cause, p95 model startup, GPU provisioning success, idle time and rental cost. These are not current dashboard metrics; they need logical-call IDs, switching events and billing data.
 
-## Автоматическая аренда при сбое — следующий этап
+## Automatic rental after failure: a future controller
 
 ```mermaid
 stateDiagram-v2
     [*] --> Primary
-    Primary --> Done: Успешный результат
-    Primary --> WaitingCapacity: Временная ошибка
-    WaitingCapacity --> Provisioning: Лимит расходов и lease разрешают аренду
-    WaitingCapacity --> Failed: Бюджет или deadline исчерпан
-    Provisioning --> Loading: GPU создан
-    Provisioning --> Reconcile: Ошибка или неопределённый результат API
-    Loading --> Ready: Туннель и проверочный inference успешны
-    Loading --> Reconcile: Таймаут загрузки
-    Ready --> Done: Возобновить сохранённое задание
-    Done --> Idle: Нет ожидающих заданий
-    Idle --> Reconcile: Истёк idle TTL
-    Reconcile --> Released: Экземпляр освобождён
+    Primary --> Done: Successful result
+    Primary --> WaitingCapacity: Transient failure
+    WaitingCapacity --> Provisioning: Budget and lease allow rental
+    WaitingCapacity --> Failed: Budget or deadline exhausted
+    Provisioning --> Loading: GPU created
+    Provisioning --> Reconcile: Failed or uncertain API result
+    Loading --> Ready: Tunnel and inference probe pass
+    Loading --> Reconcile: Model loading timeout
+    Ready --> Done: Resume saved job
+    Done --> Idle: No waiting jobs
+    Idle --> Reconcile: Idle TTL expired
+    Reconcile --> Released: Instance released
 ```
 
-Это отдельный инфраструктурный controller, а не инструмент творческого агента. Он хранит в PostgreSQL профиль модели, request/instance ID, состояние, lease, deadline, лимит цены и idle TTL. Один lease на профиль предотвращает конкурирующую аренду десятью workers. При неизвестном результате запроса сначала сверяются экземпляры по тегу запроса; повторная покупка не выполняется вслепую. Секрет Vast хранится только у controller.
+This is a separate infrastructure controller, not a creative-agent tool. PostgreSQL records model profile, request/instance ID, state, lease, deadline, price cap and idle TTL. One lease per profile prevents ten workers from renting ten machines. After an uncertain API response, reconcile instances by request tag before buying again. Only the controller holds Vast credentials.
 
-Controller проверяет актуальную цену, GPU/VRAM, фиксированную ревизию образа и весов, лимит экземпляров и общий бюджет. Ожидающий job освобождает worker и возобновляется после readiness. Загрузка весов может занять дольше обычного запроса, поэтому не должна происходить внутри текущего 120-секундного transport timeout. Watchdog находит зависшие аренды после перезапуска и освобождает их по TTL; Prometheus показывает ошибки provisioning и затраты.
+Check current price, GPU/VRAM, pinned image/weight revisions, instance limit and total budget. Waiting jobs release worker capacity and resume after readiness. Downloading weights may exceed a normal request, so provisioning must not run inside the existing 120-second transport timeout. A watchdog reconciles abandoned rentals after restarts and releases them under TTL; monitoring reports provisioning failures and spend.
 
-На Vast остановленный экземпляр продолжает оплачивать хранение, поэтому завершение сценария должно включать контролируемое удаление ненужного экземпляра, а не только stop. Цены GPU, диска и трафика проверяются в момент аренды: [правила биллинга Vast.ai](https://docs.vast.ai/guides/pricing). Автоматическая аренда, бюджетный controller и этот жизненный цикл **не реализованы и не проверены на реальном GPU**.
+Stopped Vast instances still incur storage charges. Cleanup must therefore include controlled deletion of unneeded instances, not only stop. Check compute, disk and bandwidth prices at rental time; see [Vast.ai billing](https://docs.vast.ai/guides/pricing). Automatic rental, budget control and this lifecycle **are not implemented or tested on real GPUs**.

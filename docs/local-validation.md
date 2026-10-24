@@ -1,47 +1,49 @@
-# Фактическая локальная проверка
+# Measured local validation
 
-Дата: 24 октября 2026, после добавления резервных маршрутов AI. Среда: Windows, Python 3.12.14, PostgreSQL 18.6, pgvector 0.8.7, SeaweedFS 4.49, FFmpeg 8.1.2, установленный Chrome. PostgreSQL и SeaweedFS запущены нативно и доступны только на loopback. Постоянные медиа находятся в SeaweedFS S3.
+Date: October 24, 2026, after English UI/documentation updates. Environment: Windows, Python 3.12.14, PostgreSQL 18.6, pgvector 0.8.7, SeaweedFS 4.49, FFmpeg 8.1.2 and installed Chrome. PostgreSQL/SeaweedFS run natively on loopback. Persistent media lives in SeaweedFS S3.
 
-## Результаты
+## Results
 
-| Проверка | Фактический результат |
+| Check | Observed result |
 |---|---|
-| pytest, включая интеграции | **74 passed**, 53,02 с; включая явный пустой ключ как в Compose |
-| Покрытие Python: строки | **959 / 1023 = 93,74%** |
-| Покрытие Python: ветви | **232 / 274 = 84,67%** |
-| Взвешенный показатель coverage.py | 91,83%; не смешиваем его с покрытием строк |
-| Контракты планов | 100% строк и ветвей |
-| Vitest: расчёты метрик | **3 passed** |
-| TypeScript и production build | Успешно |
-| Playwright / Chrome | **1 passed**: вход, проект, роли AI, пустые метрики, светлая/тёмная темы, 1440px и 390px |
-| Ruff и git diff --check | Успешно |
-| Mermaid в README, providers и self-hosted guide | **8 схем** успешно разобраны и отрисованы |
-| Python wheel | Собран в изолированной build-среде; файл MIT LICENSE включён |
+| pytest including integrations | **74 passed**, 51.83 s, including explicit empty credentials as in Compose |
+| Python line coverage | **959 / 1023 = 93.74%** |
+| Python branch coverage | **232 / 274 = 84.67%** |
+| coverage.py combined figure | 91.83%; distinct from line coverage |
+| Plan contracts | 100% lines and branches |
+| Vitest metric calculations | **3 passed** |
+| TypeScript / production build | Passed |
+| Playwright / Chrome | **1 passed**: sign-in, project, AI roles, empty metrics, light/dark, 1440px and 390px |
+| Ruff / git diff --check | Passed |
+| Mermaid across README and documentation | **12 diagrams** parsed/rendered |
+| Python wheel | Built in an isolated build environment, including MIT LICENSE |
 
-Сквозная интеграция создаёт два тестовых клипа (со звуком и без), добавляет тестовую аудиодорожку с пометкой прав, загружает их через HTTP, проверяет S3 и вызывает всю цепочку с детерминированным provider fixture. Настоящий FFmpeg собирает видео, выполняет полный decode, после чего рендер сохраняется в S3 и открывается через HTTP. Проверяются вторая версия и Range-ответы. Это проверка исполнения плана, **не качества Gemini**.
+The English browser check used an isolated PostgreSQL schema and a temporary API on port 8001. Screenshots show the real application with an explicitly labeled empty test project; the schema was removed afterward. Desktop and mobile layouts were inspected. A repository text scan found no remaining Cyrillic UI/documentation strings or Russian locale declarations. Existing user-entered project content is not translated by this change. The wheel check above was performed during the preceding MIT-license change.
 
-Дополнительно проверены CSRF и вход, доступ к чужому проекту, повреждённая/пустая/слишком большая загрузка, дедупликация, музыка без подтверждения прав, запрещённые эффекты, интервалы за границами исходника, embedding с неправильной размерностью/NaN/нулевой нормой, неизменяемость версий и межпроектные FK.
+The end-to-end integration generates two fixture clips, with and without audio, and a test music track with rights confirmation. It uploads through HTTP, verifies S3 and runs the pipeline with a deterministic provider fixture. Real FFmpeg assembles and fully decodes output, which is stored in S3 and served over HTTP. A second version and Range responses are checked. This verifies plan execution, **not live-model quality**.
 
-Конкурентный тест использует восемь независимых соединений PostgreSQL: один job не выдаётся двум исполнителям. Проверены смена lease token после истечения, отказ старому worker в публикации, heartbeat после отмены, исчерпание retry budget и реальный устаревший рендер, который не может заменить новую версию.
+Additional checks cover CSRF/sign-in, cross-project access, corrupt/empty/oversized uploads, deduplication, unconfirmed music rights, forbidden effects, out-of-bounds intervals, invalid embedding dimensions/NaN/zero norm, immutable versions and project-scoped foreign keys.
 
-Тестовые ответы Gemini SDK и совместимых HTTP endpoints проверяют структуру ответа, учёт токенов, длительность и сохранение ошибки без текста ответа провайдера. Проверены разные API для ролей в одном router, снимок конфигурации, отказ/обрезанный ответ, таймауты, 429/5xx, переупорядоченные и некорректные эмбеддинги, префиксы поиска и отсутствие секретов в публичных настройках. Внешняя сеть для этих тестов не используется.
+The concurrency test uses eight independent PostgreSQL connections so one job cannot be handed to two workers. It checks token rotation after expiry, stale-publication rejection, heartbeat after cancellation, retry exhaustion and an actual stale render that cannot replace a newer version.
 
-Fallback проверен для таймаута, ошибки соединения, 429/503 и Gemini SDK errors. Проверены порядок и исчерпание двух резервов, отсутствие переключения при 400/401, отсутствии ключа, отказе модели, обрезанном/невалидном ответе и ошибке аудита БД. Интеграция PostgreSQL сохраняет failed-попытку основного сервиса и succeeded-попытку резерва с разными provider/model/fingerprint. Конфигурация отвергает неизвестные/повторные маршруты, более двух резервов и fallback анализа/эмбеддингов. Проверен синтаксис полного hybrid-примера. GPU, vLLM и Vast.ai на реальном оборудовании не запускались.
+Gemini SDK and compatible HTTP fixtures verify response structure, token/time accounting and secret-free error records. They cover mixed role endpoints, configuration snapshots, refused/truncated answers, timeouts, 429/5xx, reordered/invalid embeddings, prefixes and secret-free public settings. These tests make no external model calls.
 
-Интеграционный сценарий меняет embedding-модель: поиск получает 409 до переиндексации, повторный запрос не создаёт второй активный job, старый профиль сохраняется, новый становится доступен, повторная индексация не дублирует сцены. Изменение профиля до исполнения задания обнаруживается. Отдельный тест извлекает настоящие JPEG через FFmpeg; frame-only адаптер не принимает выдуманную речь.
+Fallback tests cover timeout, connection failure, 429/503 and Gemini SDK errors, ordered backups and exhaustion. They reject switching on 400/401, missing credentials, refusal, invalid/truncated output and audit/database failure. PostgreSQL integration preserves a failed primary and successful backup with distinct provider/model/fingerprint. Configuration rejects missing/duplicate routes, more than two backups and analyst/embedding fallback. The full hybrid example parses successfully. No real GPU, vLLM or Vast.ai instance was launched.
 
-## Найденные и исправленные ошибки
+Reindex integration changes the embedding model: search returns 409 until reindexing, repeated requests deduplicate active jobs, old profiles survive, the new profile becomes searchable and repeat indexing does not duplicate scenes. Profile changes before execution are detected. Another test extracts real JPEG frames through FFmpeg; frame-only analysis rejects invented speech.
 
-- Windows proxy-настройки мешали локальному S3: для явно настроенного S3 endpoint отключено наследование системного HTTP proxy.
-- Тестовый search_path мог находить общий alembic_version и пропускать миграцию: version table теперь явно привязан к тестовой схеме; тест проверяет current_schema и пустые таблицы перед запуском.
-- Повторные музыкальные/монтажные решения для нескольких историй должны накапливать знаменатель, а не перезаписывать его единицей.
-- Vitest не должен запускать Playwright-сценарии: наборы разделены конфигурацией.
-- Compose задаёт пустой `GEMINI_API_KEY` явно: тестовые credentials теперь подменяются на уровне окружения; отдельный тест проверяет приоритет пустого значения над `.env` и кешированными настройками.
+## Issues found and fixed
 
-## Что ещё не доказано
+- Windows proxy inheritance broke local S3; explicitly configured S3 endpoints now disable inherited HTTP proxies.
+- Test search_path could find shared alembic_version and skip migration; the version table is schema-scoped, and setup verifies current_schema plus empty tables.
+- Music/edit decisions across multiple stories must accumulate denominators instead of resetting to one.
+- Vitest must not collect Playwright scenarios; configuration separates the suites.
+- Compose explicitly injects empty `GEMINI_API_KEY`. Tests override environment credentials and verify that empty environment values override `.env` and cached settings.
 
-Живые вызовы AI отключены по выбору владельца. Нет измеренной художественной оценки, reviewer recall/precision, retrieval recall на эталонном наборе, стоимости, нагрузочного SLA, RPO/RTO или проверки реального NAS. Docker не установлен на локальной машине; проверка Linux Compose вынесена в [GitHub Actions](https://github.com/Chaapa/VMerger/actions/workflows/ci.yml), статус следует проверять по конкретному commit.
+## Not yet demonstrated
 
-90% ветвей всех критических модулей и полное покрытие пользовательских сценариев — следующие цели. Текущее прохождение порогов 80% строк / 75% ветвей не превращает alpha в production-ready систему. Единственное предупреждение pytest — deprecation TestClient/httpx от установленной Starlette; тесты завершились успешно.
+Live AI calls remain disabled at the owner's request. Artistic quality, reviewer precision/recall, labeled retrieval recall, costs, load SLA, RPO/RTO and a real NAS deployment are unmeasured. Docker is not installed locally; Linux Compose validation runs in [GitHub Actions](https://github.com/Chaapa/VMerger/actions/workflows/ci.yml). Check the status for the specific commit.
 
-Исходные [31 SQL-проверка в PGlite](validation.md) сохранены как отдельный ранний этап и не подменяют эти серверные интеграции.
+Reaching 90% branch coverage in all critical modules and covering all user workflows remain goals. Passing the current 80% line /75% branch floors does not make the alpha production-ready. pytest reports one installed-Starlette TestClient/httpx deprecation warning; checks pass.
+
+The original [31 PGlite SQL assertions](validation.md) remain a separate early experiment, not a replacement for service integrations.

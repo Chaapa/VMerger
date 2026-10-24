@@ -1,52 +1,52 @@
-# Реализованный срез и границы alpha
+# Implemented scope and alpha limits
 
-24 октября 2026. Это описание кода, а не полный план из architecture.md.
+October 24, 2026. This describes shipped code rather than the full target architecture.
 
-## Реализовано
+## Implemented
 
-React-интерфейс «Истории» с чатом, материалами, проигрывателем, версиями и графиками. Сессионная HttpOnly-cookie, проверка Origin и пользовательского заголовка на изменениях. Все операции с проектом проверяют владельца; секреты и S3-ключи браузеру не выдаются.
+The React Stories interface includes chat, sources, playback, versions and charts. Sessions use HttpOnly cookies; mutations check Origin and an application request header. Project operations verify ownership. Browser clients receive no application or S3 secrets.
 
-Медиа проходят ограничение размера, ffprobe и проверку длительности/разрешения. Источники загружаются в SeaweedFS, после чего содержимое повторно читается и сверяется по SHA-256. ETag не считается хешем. Совпадающие исходники внутри проекта переиспользуются. На диске приложения остаётся только временная рабочая копия; после операции она удаляется. Постоянные файлы сервиса SeaweedFS в его каталоге данных — внутренняя реализация объектного хранилища.
+Media passes size, ffprobe, duration and resolution checks. Sources upload to SeaweedFS, then are read back and verified with SHA-256. ETag is not treated as a content hash. Duplicate sources within a project are reused. Application disk holds temporary working copies, removed afterward; persistent files inside SeaweedFS's data directory are its object-storage implementation.
 
-Анализ строит сцены и нормализованные 768-мерные текстовые embeddings. Полнотекстовый поиск не требует модели; семантический создаёт query embedding и ищет только в одном проекте и профиле. Для небольших проектов используется точный поиск. HNSW-индекс подготовлен в схеме, но не выдаётся за обязательный путь каждого запроса.
+Analysis creates scenes and normalized 768-dimensional text embeddings. Full-text search needs no model. Semantic search embeds the query and searches only one project/profile. Small projects use exact search. A partial HNSW index exists, but is not claimed as every query's execution path.
 
-Роли director → music → editor → reviewer используют структурированные ответы. Детерминированный валидатор проверяет UUID, доступность исходников, интервалы, длительность и музыку. Эффекты: none/warm/monochrome/fade; строки FFmpeg из ответов модели не исполняются. Ревьюер не заменяет валидатор и не является эталонной оценкой качества.
+Director → music → editor → reviewer use structured responses. Deterministic validation checks UUIDs, source availability, intervals, duration and music rights. Effects are none/warm/monochrome/fade; model-supplied FFmpeg expressions are not executed. Reviewer judgment is not a substitute for validation or ground truth.
 
-Совместимый inference endpoint можно разместить на своём GPU или на арендованной машине. Настраиваемые резервные маршруты творческих ролей переключаются при сетевых сбоях, таймаутах и 429/5xx, сохраняя отдельный аудит каждой попытки. Fallback выключен по умолчанию; автоматической аренды GPU, circuit breaker и лимита расходов пока нет. Сценарий Vast.ai и граница между готовым резервом и будущим provisioning описаны в [руководстве](self-hosted-llm.md).
+Compatible inference endpoints can run on owned or rented GPUs. Explicit creative-role backups handle network failures, timeouts and 429/5xx while auditing each attempt. Fallback is off by default. Automatic GPU rental, shared circuit breaking and monetary budgets are not implemented. See the [Vast.ai/self-hosting guide](self-hosted-llm.md).
 
-PG-очередь поддерживает конкурирующих worker, lease token, heartbeat, возврат просроченных заданий, лимит попыток и отмену. Публикация проверяет актуальность lease и ожидаемого родителя версии. Объект, план, рендер и переключение текущей версии связываются транзакцией после проверки S3 и полного декодирования результата. Неподтверждённый объект не становится доступным через API.
+The PostgreSQL queue supports concurrent workers, lease tokens, heartbeat, expiry recovery, attempt limits and cancellation. Publication checks the current lease and expected parent version. Object, plan, render and current-version changes commit after S3 verification and complete decode. Unverified objects are not served.
 
-## Упрощения относительно целевого дизайна
+## Differences from the target design
 
-| Область | Alpha | Целевая архитектура |
+| Area | Alpha | Target |
 |---|---|---|
-| Вход | Один владелец, случайный ключ пространства | OIDC, несколько владельцев и совместный доступ |
-| SQL | psycopg и явный SQL, Alembic использует SQLAlchemy | ORM там, где он упростит предметную модель |
-| Загрузка | Поток через API, лимит 500 МБ; повтор целиком | Прямой multipart S3 с возобновлением |
-| Обновления | Снимок состояния каждые 2,5 секунды | SSE с восстановлением снимка |
-| Анализ | Gemini: inline proxy до 14 МБ; совместимый vision API: выборка кадров | Chunking, точные границы сцен и жизненный цикл provider files |
-| Речь | Модельные фразы из нативного видео; режим кадров без речи | faster-whisper и выравнивание слов |
-| Музыка | Подтверждённые пользователем права, локальная библиотека в S3 | Интеграции лицензируемых каталогов |
-| Агентные циклы | Один проход ролей; отказ ревьюера останавливает сборку | Ограниченные циклы исправления и бюджет в деньгах |
-| Поиск эффектов | Четыре встроенных пресета | Версионируемый расширяемый каталог |
-| Хранилище | Проверка объектов и очистка failed без ссылок | Полный reconciler, retention и удаление проекта |
-| Наблюдаемость | JSON события worker, метрики БД, графики, Prometheus/Grafana | OTel, Loki/Tempo, доставка алертов |
-| Доступ к БД | Одна учётная запись alpha | Отдельные migration/API/worker роли с минимумом прав |
+| Sign-in | One owner, random workspace key | OIDC, multiple owners, collaboration |
+| SQL | psycopg with explicit SQL; Alembic uses SQLAlchemy | ORM where it simplifies domain code |
+| Upload | API streaming, 500 MB cap, whole-file retry | Resumable direct multipart S3 |
+| Updates | Snapshots every 2.5 seconds | SSE with snapshot recovery |
+| Analysis | Gemini inline proxy ≤14 MB; compatible vision frame samples | Chunking, precise boundaries, provider-file lifecycle |
+| Speech | Model phrases from native video; no speech in frame mode | faster-whisper and word alignment |
+| Music | User-confirmed rights, imported S3 library | Licensed-catalog integrations |
+| Agent loops | One role pass; reviewer rejection stops assembly | Bounded repair loops and monetary budgets |
+| Effects | Four built-in presets | Versioned extensible catalog |
+| Storage | Verification, unreferenced failed-object cleanup | Full reconciliation, retention and project deletion |
+| Observability | Worker JSON events, DB metrics, charts, Prometheus/Grafana | OTel, Loki/Tempo, alert delivery |
+| DB access | One alpha account | Separate least-privilege migration/API/worker roles |
 
-Таблицы upload_sessions, derivatives и provider_files зарезервированы в начальной схеме, но этот срез не реализует весь их жизненный цикл. Это явно отмеченный долг; не добавляем фиктивные записи для видимости полноты.
+upload_sessions, derivatives and provider_files were reserved in the baseline schema; this slice does not implement their entire lifecycle. That debt is explicit; no placeholder records are created to imply completeness.
 
-## Реальные измерения в приложении
+## Actual application measurements
 
-- `plan_valid`: число планов, прошедших проверку / число проверенных планов в попытке. Для нескольких историй числитель и знаменатель накапливаются.
-- `source_bounds_pass`: проверенные интервалы / все интервалы анализа.
-- `provider_approval`: доля одобрений самим модельным ревьюером, источник `provider`. Это не human approval и не reviewer recall.
-- `decode_pass`: 1 после успешного полного декодирования опубликованного рендера. Ошибки остаются в jobs; эта метрика сама по себе не является end-to-end success rate.
-- `duration_error_seconds`: абсолютная разница между длительностью готового файла и суммой выбранных диапазонов. В UI есть график по выполненным рендерам.
-- Время каждого модельного вызова, входные/выходные токены, статус, модель. График и p95 строятся по ai_calls, включая ошибки. Стоимость без проверенного прайсинга — `null`.
-- Время обработки задания, очередь по статусам, возраст старейшего задания и ошибки провайдера за час.
+- `plan_valid`: passed plans / checked plans in an attempt. Multiple stories accumulate numerator and denominator.
+- `source_bounds_pass`: checked valid analysis intervals / all analysis intervals.
+- `provider_approval`: the model reviewer's approval rate, source `provider`; not human approval or reviewer recall.
+- `decode_pass`: 1 after full decode of a published render. Failures remain in jobs; this alone is not end-to-end success rate.
+- `duration_error_seconds`: absolute output-duration minus planned-range duration. UI charts use completed renders.
+- Model-call time, input/output tokens, status and model. Charts/p95 include failed calls. Cost stays `null` without verified pricing.
+- Job processing time, queue status counts, oldest-job age and provider failures in the last hour.
 
-В UI N означает наблюдения/попытки. Независимых проектов для научного сравнения моделей пока нет. Человеческие метрики, precision/recall ревьюера, музыкальная уместность и интервалы доверия описаны в agent-evaluation.md, но ещё не измерены. Повторные вызовы нельзя выдавать за независимую выборку.
+UI N counts observations/attempts, not independent projects for scientific comparison. Human metrics, reviewer precision/recall, music fit and confidence intervals are specified in [agent evaluation](agent-evaluation.md), but unmeasured. Repeated calls are not independent samples.
 
-## Перед расширением эксплуатации
+## Before broader operation
 
-Сначала подтвердить живой прогон выбранных провайдеров на разрешённых к отправке видео, собрать размеченный набор реальных поездок и проверить качество вручную. Затем добавить возобновляемые загрузки и reconciler, OIDC, права runtime-ролей и ограничение расходов. Масштабирование worker не устраняет ограничения одного диска, S3-узла и PostgreSQL; отказоустойчивость требует отдельного развёртывания и измерений.
+Run selected live providers on footage permitted for transmission, label a real-trip dataset and review quality manually. Then add resumable uploads/reconciliation, OIDC, runtime-role permissions and spending limits. Scaling workers does not remove the limits of one disk, S3 node or database; high availability requires separate deployment and measurements.

@@ -148,11 +148,11 @@ provider = "gateway"
 model = "your-review-model"
 ```
 
-Put `AI_API_KEY` in `.env`. Keep or change the analyst and embedding routes separately. You can define multiple compatible endpoints with separate key variables, including a local inference server. Each job attempt snapshots the configuration; file changes affect subsequent attempts without rebuilding the application. Restart API/worker after changing environment secrets and refresh the browser to see the current routes under **Качество → AI-команда**.
+Put `AI_API_KEY` in `.env`. Keep or change the analyst and embedding routes separately. You can define multiple compatible endpoints with separate key variables, including a local inference server. Each job attempt snapshots the configuration; file changes affect subsequent attempts without rebuilding the application. Restart API/worker after changing environment secrets and refresh the browser to see the current routes under **Quality and agents → AI team**.
 
 The compatible adapter uses Chat Completions and Embeddings HTTP contracts. Its analyst mode sends a bounded set of timestamped JPEG frames to a vision-capable model: it has no audio and may miss brief events. Gemini uses the reduced video directly. Endpoint support for JSON schemas, token parameters and 768-dimensional embeddings must match the configuration. See [provider configuration, capabilities and examples](docs/providers.md).
 
-Changing an embedding model, compatible endpoint or text prefixes selects a different profile. Click **Материалы → Обновить поиск** to populate it from existing scene text. Old vectors and videos remain intact; semantic search refuses an incomplete profile instead of comparing incompatible vectors.
+Changing an embedding model, compatible endpoint or text prefixes selects a different profile. Click **Sources → Rebuild search** to populate it from existing scene text. Old vectors and videos remain intact; semantic search refuses an incomplete profile instead of comparing incompatible vectors.
 
 ### Your own LLM and GPU fallback
 
@@ -186,7 +186,7 @@ docker compose up --build -d
 
 Open **http://127.0.0.1:8000**. Sign in with `APP_TOKEN` from the generated `.env`. Secrets and media are ignored by Git. Set `MEDIA_ROOT` in `.env` to a directory on your server/NAS before starting if you want a different storage location. PostgreSQL uses its own local volume.
 
-Without configured AI credentials, uploads, storage and the interface work. Select routes in `config/ai.toml`, add their referenced keys to `.env`, restart the API/worker, then click **Материалы → Проанализировать** for existing videos. The bundled configuration retains Gemini as one starting option. Only the selected providers receive model inputs; originals remain in private S3. Compose mounts the configuration directory read-only into API and worker.
+Without configured AI credentials, uploads, storage and the interface work. Select routes in `config/ai.toml`, add their referenced keys to `.env`, restart the API/worker, then click **Sources → Analyze** for existing videos. The bundled configuration retains Gemini as one starting option. Only the selected providers receive model inputs; originals remain in private S3. Compose mounts the configuration directory read-only into API and worker.
 
 ```sh
 docker compose up -d --force-recreate api worker
@@ -213,7 +213,7 @@ pnpm --dir web exec playwright install chromium
 pnpm --dir web exec playwright test          # running API, live providers disabled
 ```
 
-Integration tests create a fresh schema and an explicitly scoped Alembic version table. They use real PostgreSQL, S3 and FFmpeg, then remove their own data. Test videos and provider fixtures are explicitly marked; personal footage and invented benchmark results are never committed. The browser smoke test creates an empty project named “Локальная проверка”.
+Integration tests create a fresh schema and an explicitly scoped Alembic version table. They use real PostgreSQL, S3 and FFmpeg, then remove their own data. Test videos and provider fixtures are explicitly marked; personal footage and invented benchmark results are never committed. The browser smoke test creates an empty project named “Local validation”.
 
 CI builds the Compose stack on Linux and runs the backend, frontend and browser checks. Current backend floors are 80% lines / 75% branches; contract and lease modules have stricter floors. See the validation document for measured coverage and remaining gaps.
 

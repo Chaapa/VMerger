@@ -1,49 +1,49 @@
-# Развёртывание на своём сервере / NAS
+# Deploying on your server or NAS
 
-Alpha рассчитана на одного владельца. Сервер должен поддерживать Docker Compose; обработку можно вынести с NAS на отдельный CPU-хост. PostgreSQL хранит данные на локальном диске своей машины, медиа — в SeaweedFS на диске/NAS. Локальный проверенный запуск не равнозначен проверке вашей конкретной модели NAS.
+The alpha supports one owner. The server needs Docker Compose; processing can move from the NAS to a separate CPU host. PostgreSQL keeps data on its host's local disk, while SeaweedFS stores media on server/NAS storage. A successful local run does not verify a particular NAS model.
 
-## Первый запуск
+## First launch
 
-1. Склонировать репозиторий и выполнить `python3 scripts/configure.py`.
-2. В `.env` задать `MEDIA_ROOT=/srv/vmerger/media` и ключи провайдеров, выбранных в `config/ai.toml`. Можно использовать внешние API или свою LLM. Сохранить секреты в менеджере паролей. Каталог MEDIA_ROOT должен существовать и быть доступен контейнеру SeaweedFS.
-3. `docker compose config --quiet`, затем `docker compose up --build -d`.
-4. Проверить `docker compose ps`, `curl -f http://127.0.0.1:8000/readyz` и вход с APP_TOKEN.
-5. Для доступа с компьютера через SSH без публикации порта: `ssh -L 8000:127.0.0.1:8000 user@server`.
+1. Clone the repository and run `python3 scripts/configure.py`.
+2. Set `MEDIA_ROOT=/srv/vmerger/media` in `.env` and add credentials for routes selected in `config/ai.toml`. Hosted APIs and self-hosted LLMs are supported. Store secrets in a password manager. MEDIA_ROOT must exist and be accessible to SeaweedFS.
+3. Run `docker compose config --quiet`, then `docker compose up --build -d`.
+4. Check `docker compose ps`, `curl -f http://127.0.0.1:8000/readyz`, and sign in with APP_TOKEN.
+5. For SSH access without exposing the application port: `ssh -L 8000:127.0.0.1:8000 user@server`.
 
-БД, S3, filer и master не публикуют порты хоста. У API по умолчанию только loopback. Внутри Docker-сети сервисы доверяют друг другу; не подключайте к ней посторонние контейнеры.
+Database, S3, filer and master do not publish host ports. API binds to loopback by default. Services trust one another within the Docker network; do not attach unrelated containers.
 
-Подключение GPU с vLLM на своём сервере или Vast.ai, SSH-туннель для нативного/Docker worker и резервные маршруты описаны в [отдельном руководстве](self-hosted-llm.md). Резерв должен быть заранее запущен: автоматическую аренду и освобождение GPU текущий Compose не выполняет.
+The [self-hosting guide](self-hosted-llm.md) covers vLLM on your GPU or Vast.ai, native/Docker SSH tunnels and backup routes. Backups must already be running: the base Compose setup does not rent or release GPUs.
 
 ## HTTPS
 
-Направьте DNS домена на сервер, задайте DOMAIN в `.env`, откройте только 80/443 и запустите:
+Point the domain's DNS at the server, set DOMAIN in `.env`, expose ports 80/443 and run:
 
 ```sh
 docker compose -f compose.yaml -f deploy/compose.server.yaml up --build -d
 ```
 
-Caddy получает сертификат, а API использует Secure-cookie и ожидает точный HTTPS Origin. Не отключайте Origin-проверку для устранения ошибок прокси; исправьте домен в конфигурации.
+Caddy obtains a certificate. The API uses Secure cookies and requires the exact HTTPS Origin. Correct the domain/proxy configuration rather than disabling Origin validation.
 
-## Масштабирование
+## Scaling
 
 ```sh
 docker compose up -d --scale worker=2
 ```
 
-API не хранит единственную копию состояния в памяти. Workers получают задания из PostgreSQL. Для раздельных пулов используйте `python -m vmerger.worker --queues ai` и `--queues render`. Не увеличивайте количество FFmpeg-процессов без измерения памяти, CPU, временного диска и скорости чтения S3. Текущий SeaweedFS mini — один узел, без репликации. Его можно заменить распределённым SeaweedFS/S3, сохранив интерфейс приложения.
+API memory is not the sole state store. Workers claim PostgreSQL jobs. Separate pools can run `python -m vmerger.worker --queues ai` and `--queues render`. Measure memory, CPU, scratch and S3 throughput before increasing FFmpeg concurrency. SeaweedFS mini is currently single-node without replication. Distributed SeaweedFS/S3 can replace it behind the same application interface.
 
-## Мониторинг
+## Monitoring
 
-`docker compose --profile monitoring up -d`. Grafana и Prometheus остаются на loopback. Grafana импортирует dashboard «VMerger · Operations»; Prometheus отслеживает недоступность API, очередь старше 10 минут и ошибки провайдера. Alertmanager/доставка уведомлений в этой версии не настроены. Подробные наблюдения отдельных историй доступны на вкладке качества приложения; UUID и имена файлов не используются как labels.
+Run `docker compose --profile monitoring up -d`. Grafana and Prometheus remain on loopback. Grafana provisions **VMerger · Operations**; Prometheus checks API unavailability, queues older than ten minutes and provider failures. Alertmanager/outbound notifications are not configured. The application's Quality tab shows per-story observations. UUIDs and filenames are not metric labels.
 
-## Резервная копия и восстановление
+## Backup and restore
 
-Для согласованной простой копии alpha остановите приём изменений и worker (`docker compose stop api worker`), выполните `pg_dump` в custom format из контейнера БД и сделайте snapshot/copy **всего MEDIA_ROOT**, включая метаданные filer. После этого снова запустите API/worker. Одни файлы томов SeaweedFS без метаданных не являются полноценной копией. Храните зашифрованную копию отдельно от сервера; отдельно сохраните секреты и версию кода.
+For a simple consistent alpha backup, stop API/worker with `docker compose stop api worker`, create a custom-format `pg_dump` from the database container and snapshot/copy **all of MEDIA_ROOT**, including filer metadata. Restart services afterward. SeaweedFS volume files without metadata are not a complete backup. Keep an encrypted copy off-server and preserve secrets and code version separately.
 
-Восстановление проверяйте на отдельной пустой установке: восстановить дамп и полный каталог SeaweedFS, запустить ту же версию, проверить readyz, вход, чтение нескольких источников, хеши, старые версии видео и новый рендер. Затем можно применять миграции следующей версии. **RPO/RTO пока не измерены**; значения из quality-and-operations.md — цели, а не обещание готовой системы.
+Test restoration on an empty independent installation: restore the dump and complete SeaweedFS directory, start the same code version, check readiness/sign-in, read sources, verify hashes, play old versions and produce a new render. Apply later migrations afterward. **RPO/RTO are unmeasured**; values in the operations design are targets.
 
-## Обновление и обслуживание
+## Updates and maintenance
 
-Остановить API/worker, сохранить резервную копию, получить новый commit, пересобрать и запустить init, затем сервисы. Миграции не запускаются конкурентно каждым worker. Автоматический destructive downgrade отсутствует; восстановление производится из проверенной копии.
+Stop API/worker, back up, fetch the new commit, rebuild, run init and restart services. Workers do not run migrations concurrently. There is no automatic destructive downgrade; recover using a verified backup.
 
-`docker compose run --rm api python -m vmerger.cleanup` удаляет только failed-объекты без ссылок из assets/renders/derivatives. Объекты writing после аварий требуют разбора; автоматическое удаление всего проекта/retention ещё не реализовано. Это ограничение alpha, которое нужно закрыть до длительной многопользовательской эксплуатации.
+`docker compose run --rm api python -m vmerger.cleanup` deletes only failed objects unreferenced by assets/renders/derivatives. Objects left writing after crashes need investigation. Full project deletion/retention is not implemented; address this before sustained multi-user operation.
