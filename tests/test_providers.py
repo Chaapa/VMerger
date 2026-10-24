@@ -140,6 +140,18 @@ def test_legacy_configuration_and_invalid_routes(monkeypatch):
         RoutingConfig.model_validate(data)
 
 
+def test_explicit_environment_credentials_take_precedence(monkeypatch):
+    from vmerger.ai_config import api_key
+
+    provider = ProviderConfig(adapter="gemini", api_key_env="GEMINI_API_KEY")
+    monkeypatch.setattr(settings(), "gemini_api_key", "cached-file-fixture")
+    # Compose injects an explicit empty value when live AI is disabled.
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    assert api_key(provider, {"GEMINI_API_KEY": "file-fixture"}) == ""
+    monkeypatch.setenv("GEMINI_API_KEY", "environment-fixture")
+    assert api_key(provider, {"GEMINI_API_KEY": "file-fixture"}) == "environment-fixture"
+
+
 @pytest.mark.parametrize(
     "mode,token_field", [("json_schema", "max_completion_tokens"), ("json_object", "max_tokens")]
 )

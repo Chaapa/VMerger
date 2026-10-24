@@ -64,7 +64,7 @@ def test_worker_failure_keeps_history_and_metrics(project, monkeypatch):
 
 
 def test_provider_adapter_records_success_and_failure_without_network(project, monkeypatch):
-    monkeypatch.setattr(settings(), "gemini_api_key", "test-only")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only")
     with connect() as conn:
         enqueue(conn, project["id"], "build_project", {}, str(uuid4()))
     job = jobs.claim()

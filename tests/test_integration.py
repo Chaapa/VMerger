@@ -58,7 +58,7 @@ def test_real_pipeline_roundtrip_versions_and_metrics(client, project, videos, m
         prefix + "/assets?name=fixture.wav&license_note=Generated+test+signal", content=music.read_bytes()
     )
     assert audio.status_code == 201, audio.text
-    monkeypatch.setattr(settings(), "gemini_api_key", "test-fixture-no-network")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fixture-no-network")
     assert client.post(prefix + "/analyze").status_code == 202
     assert client.post(prefix + "/analyze").json()["queued"] == 0
     drain()
@@ -118,7 +118,7 @@ def test_embedding_switch_requires_reindex_and_preserves_old_profile(
 ):
     prefix = f"/api/projects/{project['id']}"
     client.post(prefix + "/assets?name=fixture.mp4", content=videos[0][0].read_bytes())
-    monkeypatch.setattr(settings(), "gemini_api_key", "test-fixture-no-network")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fixture-no-network")
     assert client.post(prefix + "/analyze").status_code == 202
     drain()
     old_profile = ProviderRouter({}).embedding_profile
