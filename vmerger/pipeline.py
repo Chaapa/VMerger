@@ -224,7 +224,7 @@ def plan(job, provider):
             )
         conn.execute(
             "INSERT INTO messages(project_id,story_id,role,text) VALUES (%s,%s,'assistant',%s)",
-            (job["project_id"], message["story_id"], f"План готов. Собираю историй: {len(plans)}."),
+            (job["project_id"], message["story_id"], f"Plan ready. Rendering {len(plans)} stories."),
         )
         jobs.succeed(conn, job)
 
@@ -297,7 +297,7 @@ def render_version(job):
                 (
                     job["project_id"],
                     version["story_id"],
-                    f"Готово: «{plan.title}», версия {version['revision']}.",
+                    f"Ready: “{plan.title}”, version {version['revision']}.",
                 ),
             )
             jobs.succeed(conn, job)

@@ -46,9 +46,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const data = await response.json();
   if (!response.ok)
     throw new Error(
-      typeof data.detail === "string"
-        ? data.detail
-        : "Проверьте введённые данные",
+      typeof data.detail === "string" ? data.detail : "Please check your input",
     );
   return data;
 }
@@ -57,30 +55,30 @@ const seconds = (us: number) => {
   return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
 };
 const labels: Record<string, string> = {
-  imported: "Ждёт анализа",
-  ready: "Готово",
-  processing: "Анализ",
-  planning: "Сценарий",
-  rendering: "Сборка",
-  queued: "В очереди",
-  running: "В работе",
-  succeeded: "Готово",
-  failed: "Ошибка",
-  cancelled: "Отменено",
+  imported: "Awaiting analysis",
+  ready: "Ready",
+  processing: "Analyzing",
+  planning: "Planning",
+  rendering: "Rendering",
+  queued: "Queued",
+  running: "Running",
+  succeeded: "Ready",
+  failed: "Failed",
+  cancelled: "Cancelled",
 };
 const operations: Record<string, string> = {
-  analyze_asset: "Анализ видео",
-  apply_message: "Работа над историей",
-  render_version: "Сборка видео",
-  reindex_embeddings: "Обновление смыслового поиска",
+  analyze_asset: "Analyzing video",
+  apply_message: "Developing story",
+  render_version: "Rendering video",
+  reindex_embeddings: "Updating semantic search",
 };
 const aiRoles: Record<string, string> = {
-  analyst: "Аналитик видео",
-  director: "Режиссёр",
-  music: "Музыкальный агент",
-  editor: "Монтажёр",
-  reviewer: "Ревьюер",
-  embedding: "Смысловой поиск",
+  analyst: "Video analyst",
+  director: "Director",
+  music: "Music agent",
+  editor: "Editor",
+  reviewer: "Reviewer",
+  embedding: "Semantic search",
 };
 
 function App() {
@@ -192,10 +190,10 @@ function App() {
   };
   const upload = async (files: FileList | File[], music = false) => {
     if (!selected) return;
-    await execute("Загружаю и проверяю файлы…", async () => {
+    await execute("Uploading and checking files…", async () => {
       for (const file of Array.from(files)) {
         if (file.size > config.max_upload_mb * 1024 * 1024)
-          throw new Error(`${file.name}: максимум ${config.max_upload_mb} МБ`);
+          throw new Error(`${file.name}: max ${config.max_upload_mb} MB`);
         await api(
           `/projects/${selected}/assets?name=${encodeURIComponent(file.name)}&license_note=${encodeURIComponent(music ? licenseNote : "")}`,
           {
@@ -222,7 +220,7 @@ function App() {
   const messages =
     snapshot?.messages.filter((m) => m.story_id === storyId) || [];
   const send = (text: string) =>
-    execute("Отправляю…", async () => {
+    execute("Sending…", async () => {
       await api(`/projects/${selected}/messages`, {
         method: "POST",
         body: JSON.stringify({
@@ -249,7 +247,7 @@ function App() {
           className="login-card"
           onSubmit={(e) => {
             e.preventDefault();
-            execute("Вхожу…", async () => {
+            execute("Signing in…", async () => {
               await api("/session", {
                 method: "POST",
                 body: JSON.stringify({ token }),
@@ -266,17 +264,17 @@ function App() {
             </span>{" "}
             VMerger
           </div>
-          <p className="eyebrow">ВАШИ ВИДЕО. ВАШИ ИСТОРИИ.</p>
+          <p className="eyebrow">YOUR FOOTAGE. YOUR STORIES.</p>
           <h1>
-            У каждого путешествия
+            Every journey
             <br />
-            есть своя история.
+            has a story.
           </h1>
           <p className="muted">
-            Войдите в своё пространство, чтобы собрать её.
+            Sign in to your workspace to bring it together.
           </p>
           <label>
-            Ключ пространства
+            Workspace key
             <input
               autoComplete="current-password"
               type="password"
@@ -286,16 +284,14 @@ function App() {
             />
           </label>
           <button className="primary" disabled={!!busy}>
-            Открыть пространство <ChevronRight size={18} />
+            Open workspace <ChevronRight size={18} />
           </button>
           {error && (
             <p role="alert" className="error">
               {error}
             </p>
           )}
-          <small>
-            Для локального запуска ключ находится в APP_TOKEN файла .env.
-          </small>
+          <small>For local setup, use APP_TOKEN from your .env file.</small>
         </form>
       </main>
     );
@@ -315,7 +311,7 @@ function App() {
           </span>
           VMerger<span className="beta">ALPHA</span>
         </button>
-        <p className="sidebar-label">ПРОСТРАНСТВО</p>
+        <p className="sidebar-label">WORKSPACE</p>
         <button
           className={`nav-item ${!selected ? "active" : ""}`}
           onClick={() => {
@@ -323,13 +319,13 @@ function App() {
             setSnapshot(null);
           }}
         >
-          <FolderOpen size={19} /> Мои проекты <span>{projects.length}</span>
+          <FolderOpen size={19} /> My projects <span>{projects.length}</span>
         </button>
         <div className="sidebar-label row">
-          ПРОЕКТЫ
+          PROJECTS
           <button
             className="icon-button"
-            aria-label="Новый проект"
+            aria-label="New project"
             onClick={() => setCreating(true)}
           >
             <Plus size={15} />
@@ -351,24 +347,24 @@ function App() {
           <div className="storage-note">
             <span className="online-dot" />
             <div>
-              Личное хранилище<small>Медиа на вашем сервере</small>
+              Private storage<small>Media on your server</small>
             </div>
           </div>
           <div className="row">
             <span className="avatar">Y</span>
-            <span>Моё пространство</span>
+            <span>My workspace</span>
             <button
               className="icon-button"
-              aria-label="Сменить тему"
+              aria-label="Toggle theme"
               onClick={() => setDark(!dark)}
             >
               {dark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
             <button
               className="icon-button"
-              aria-label="Выйти"
+              aria-label="Sign out"
               onClick={() =>
-                execute("Выхожу…", async () => {
+                execute("Signing out…", async () => {
                   await api("/session", { method: "DELETE" });
                   setSignedIn(false);
                   setSnapshot(null);
@@ -383,15 +379,15 @@ function App() {
       <main className="main">
         <header className="topbar">
           <span className="breadcrumb">
-            Моё пространство{" "}
+            My workspace{" "}
             {selected && (
               <>
-                <ChevronRight size={14} /> {snapshot?.title || "Загрузка…"}
+                <ChevronRight size={14} /> {snapshot?.title || "Loading…"}
               </>
             )}
           </span>
           <span className="private-label">
-            <span className="online-dot" /> Приватное медиа
+            <span className="online-dot" /> Private media
           </span>
         </header>
         {error && (
@@ -400,7 +396,7 @@ function App() {
             <button
               className="icon-button"
               onClick={() => setError("")}
-              aria-label="Закрыть ошибку"
+              aria-label="Dismiss error"
             >
               <X size={16} />
             </button>
@@ -416,14 +412,14 @@ function App() {
           <section className="overview">
             <div className="page-heading">
               <div>
-                <p className="eyebrow">МЕНЬШЕ МОНТАЖА. БОЛЬШЕ ВОСПОМИНАНИЙ.</p>
-                <h1>Ваши истории</h1>
+                <p className="eyebrow">LESS EDITING. MORE MEMORIES.</p>
+                <h1>Your stories</h1>
                 <p className="muted">
-                  Загрузите видео. Расскажите, что хотите сохранить.
+                  Upload your footage. Tell us what matters to you.
                 </p>
               </div>
               <button className="primary" onClick={() => setCreating(true)}>
-                <Plus size={18} /> Новый проект
+                <Plus size={18} /> New project
               </button>
             </div>
             <div className="intro-card">
@@ -431,33 +427,33 @@ function App() {
                 <Sparkles size={34} />
               </div>
               <div>
-                <h2>Из отдельных моментов — в цельную историю</h2>
+                <h2>Turn individual moments into a story</h2>
                 <p>
-                  Система разберётся в событиях, предложит сценарий и соберёт
-                  видео.
+                  The system finds the events, plans the story and edits your
+                  film.
                   <br />
-                  Чтобы что-то изменить, просто напишите в чат.
+                  To make a change, just ask in chat.
                 </p>
                 <div className="steps">
                   <span>
-                    01 <b>Добавьте видео</b>
+                    01 <b>Add footage</b>
                   </span>
                   <i />
                   <span>
-                    02 <b>Опишите идею</b>
+                    02 <b>Describe your idea</b>
                   </span>
                   <i />
                   <span>
-                    03 <b>Смотрите историю</b>
+                    03 <b>Watch your story</b>
                   </span>
                 </div>
               </div>
             </div>
             <div className="section-heading">
               <h2>
-                Все проекты <span className="count">{projects.length}</span>
+                All projects <span className="count">{projects.length}</span>
               </h2>
-              <span className="muted">Последние изменения</span>
+              <span className="muted">Recently updated</span>
             </div>
             <div className="project-grid">
               {projects.map((p, i) => (
@@ -468,13 +464,13 @@ function App() {
                 >
                   <div className={`card-cover cover-${i % 3}`}>
                     <Film size={36} />
-                    <span>Личный проект</span>
+                    <span>Personal project</span>
                   </div>
                   <div className="card-body">
                     <h3>{p.title}</h3>
-                    <p>{p.brief || "Ваша следующая история"}</p>
+                    <p>{p.brief || "Your next story"}</p>
                     <footer>
-                      {new Date(p.created_at).toLocaleDateString("ru-RU")}
+                      {new Date(p.created_at).toLocaleDateString("en-US")}
                       <ChevronRight size={17} />
                     </footer>
                   </div>
@@ -484,15 +480,15 @@ function App() {
                 <span>
                   <Plus size={24} />
                 </span>
-                <b>Начните новую историю</b>
-                <small>Поездка, выходные или просто жизнь</small>
+                <b>Start a new story</b>
+                <small>A trip, a weekend, or everyday life</small>
               </button>
             </div>
           </section>
         ) : !snapshot ? (
           <div className="empty">
             <LoaderCircle className="spin" />
-            Загружаю проект…
+            Loading project…
           </div>
         ) : (
           <section className="workspace">
@@ -505,11 +501,11 @@ function App() {
                     setSnapshot(null);
                   }}
                 >
-                  <ArrowLeft size={14} /> Все проекты
+                  <ArrowLeft size={14} /> All projects
                 </button>
                 <h1>{snapshot.title}</h1>
                 <p className="muted">
-                  {snapshot.brief || "Всё начинается с ваших видео."}
+                  {snapshot.brief || "It all starts with your footage."}
                 </p>
               </div>
               <button
@@ -517,7 +513,7 @@ function App() {
                 disabled={!!busy}
                 onClick={() => uploadInput.current?.click()}
               >
-                <Upload size={17} /> Добавить видео
+                <Upload size={17} /> Add videos
               </button>
             </div>
             <input
@@ -537,15 +533,14 @@ function App() {
                 <div>
                   <b>
                     {config.config_error
-                      ? "Не удалось прочитать настройки AI"
+                      ? "Could not load AI configuration"
                       : config.planning_available || config.analysis_available
-                        ? "Часть AI-ролей не настроена"
-                        : "AI пока не подключён"}
+                        ? "Some AI roles need configuration"
+                        : "AI is not connected yet"}
                   </b>
                   <span>
-                    Загрузка и хранение работают. Доступность анализа и сборки
-                    зависит от настроенных ролей — они показаны во вкладке
-                    качества.
+                    Uploads and storage are available. Analysis and rendering
+                    depend on the configured roles shown in the Quality tab.
                   </span>
                 </div>
               </div>
@@ -556,21 +551,21 @@ function App() {
                 onClick={() => setTab("stories")}
               >
                 <Film size={16} />
-                Истории <span>{snapshot.stories.length}</span>
+                Stories <span>{snapshot.stories.length}</span>
               </button>
               <button
                 className={tab === "sources" ? "chosen" : ""}
                 onClick={() => setTab("sources")}
               >
                 <FolderOpen size={16} />
-                Материалы <span>{snapshot.assets.length}</span>
+                Sources <span>{snapshot.assets.length}</span>
               </button>
               <button
                 className={tab === "metrics" ? "chosen" : ""}
                 onClick={() => setTab("metrics")}
               >
                 <BarChart3 size={16} />
-                Качество и работа агентов
+                Quality and agents
               </button>
             </div>
             {activeJobs.length > 0 && (
@@ -583,7 +578,7 @@ function App() {
                     </span>
                     <button
                       onClick={() =>
-                        execute("Отменяю…", async () => {
+                        execute("Cancelling…", async () => {
                           await api(
                             `/projects/${selected}/jobs/${j.id}/cancel`,
                             { method: "POST" },
@@ -592,7 +587,7 @@ function App() {
                         })
                       }
                     >
-                      Отменить
+                      Cancel
                     </button>
                   </div>
                 ))}
@@ -601,10 +596,10 @@ function App() {
             {tab === "metrics" ? (
               <>
                 <div className="sources">
-                  <h2>AI-команда</h2>
+                  <h2>AI team</h2>
                   <p className="muted">
-                    Текущие модели по ролям. Наличие ключа ещё не подтверждает
-                    доступность API.
+                    Current models by role. A configured key does not confirm
+                    API availability.
                   </p>
                   <div className="job-table">
                     {Object.entries(config.routes).map(([role, route]) => (
@@ -618,14 +613,14 @@ function App() {
                               key={`${backup.provider}/${backup.model}`}
                             >
                               <br />
-                              Резерв {index + 1}: {backup.provider} ·{" "}
+                              Backup {index + 1}: {backup.provider} ·{" "}
                               {backup.model}
-                              {backup.configured ? "" : " · нужен ключ"}
+                              {backup.configured ? "" : " · key required"}
                             </small>
                           ))}
                         </span>
                         <span className="badge">
-                          {route.configured ? "Настроен" : "Нужен ключ"}
+                          {route.configured ? "Configured" : "Key required"}
                         </span>
                       </div>
                     ))}
@@ -636,7 +631,7 @@ function App() {
             ) : tab === "sources" ? (
               <div className="sources">
                 <div className="section-heading">
-                  <h2>Исходные материалы</h2>
+                  <h2>Source materials</h2>
                   <div className="row">
                     <button
                       className="secondary"
@@ -644,7 +639,7 @@ function App() {
                         !config.analysis_available || !!activeJobs.length
                       }
                       onClick={() =>
-                        execute("Запускаю анализ…", async () => {
+                        execute("Starting analysis…", async () => {
                           await api(`/projects/${selected}/analyze`, {
                             method: "POST",
                           });
@@ -652,7 +647,7 @@ function App() {
                         })
                       }
                     >
-                      Проанализировать
+                      Analyze
                     </button>
                     <button
                       className="secondary"
@@ -661,9 +656,9 @@ function App() {
                         !!activeJobs.length ||
                         !!busy
                       }
-                      title="Обновить эмбеддинги после смены модели поиска"
+                      title="Rebuild embeddings after changing the search model"
                       onClick={() =>
-                        execute("Обновляю поиск…", async () => {
+                        execute("Updating search…", async () => {
                           await api(
                             `/projects/${selected}/embeddings/reindex`,
                             { method: "POST" },
@@ -672,30 +667,30 @@ function App() {
                         })
                       }
                     >
-                      Обновить поиск
+                      Rebuild search
                     </button>
                     <button
                       className="secondary"
                       onClick={() => setShowMusic(!showMusic)}
                     >
-                      Добавить музыку
+                      Add music
                     </button>
                   </div>
                 </div>
                 {config.analysis_mode === "sampled_frames" && (
                   <p className="muted">
-                    Анализ по выборке кадров: без распознавания речи, короткие
-                    события могут быть пропущены.
+                    Analysis uses sampled frames without speech recognition.
+                    Brief events may be missed.
                   </p>
                 )}
                 {showMusic && (
                   <div className="music-form">
                     <label>
-                      Источник и право использования
+                      Source and usage rights
                       <input
                         value={licenseNote}
                         onChange={(e) => setLicenseNote(e.target.value)}
-                        placeholder="Например: мой трек, все права принадлежат мне"
+                        placeholder="For example: my own track, I hold all rights"
                       />
                     </label>
                     <button
@@ -703,7 +698,7 @@ function App() {
                       disabled={!licenseNote.trim() || !!busy}
                       onClick={() => musicInput.current?.click()}
                     >
-                      Выбрать аудио
+                      Choose audio
                     </button>
                     <input
                       hidden
@@ -726,10 +721,8 @@ function App() {
                       <div>
                         <b>{a.original_name}</b>
                         <small>
-                          {a.kind === "audio"
-                            ? "Музыкальная библиотека"
-                            : "Видео"}{" "}
-                          · {seconds(a.duration_us)}
+                          {a.kind === "audio" ? "Music library" : "Video"} ·{" "}
+                          {seconds(a.duration_us)}
                         </small>
                       </div>
                       <span className={`badge ${a.status}`}>
@@ -753,7 +746,7 @@ function App() {
                           setVersionId(null);
                         }}
                       >
-                        <ArrowLeft size={14} /> Все истории
+                        <ArrowLeft size={14} /> All stories
                       </button>
                       <h2>{story.title}</h2>
                       <div className="player">
@@ -766,15 +759,15 @@ function App() {
                         ) : (
                           <div className="empty">
                             <Film size={40} />
-                            <p>Видео появится после сборки</p>
+                            <p>Your video will appear after rendering</p>
                           </div>
                         )}
                       </div>
                       <div className="version-bar">
                         <label>
-                          Версия
+                          Version
                           <select
-                            aria-label="Версия истории"
+                            aria-label="Story version"
                             value={playingVersion || ""}
                             onChange={(e) => setVersionId(e.target.value)}
                           >
@@ -782,7 +775,7 @@ function App() {
                               <option value={v.id} key={v.id}>
                                 {v.revision}
                                 {v.id === story.current_version_id
-                                  ? " · текущая"
+                                  ? " · current"
                                   : ""}
                               </option>
                             ))}
@@ -795,15 +788,15 @@ function App() {
                             href={`/api/projects/${selected}/objects/${render.storage_object_id}`}
                           >
                             <ArrowDownToLine size={16} />
-                            Скачать
+                            Download
                           </a>
                         )}
                       </div>
                       <p className="muted">{story.description}</p>
                       {versionId && versionId !== story.current_version_id && (
                         <p className="notice">
-                          Вы смотрите предыдущую версию. Новые правки
-                          применяются к текущей.
+                          You are viewing an earlier version. New edits apply to
+                          the current version.
                         </p>
                       )}
                     </>
@@ -826,7 +819,7 @@ function App() {
                             <h3>{s.title}</h3>
                             <p>{s.description}</p>
                             <span className="watch">
-                              Открыть историю <ChevronRight size={15} />
+                              Open story <ChevronRight size={15} />
                             </span>
                           </div>
                         </button>
@@ -846,8 +839,8 @@ function App() {
                       />
                       <p className="muted">
                         {snapshot.assets.length
-                          ? `${snapshot.assets.length} материалов загружено. Напишите идею в чат.`
-                          : `До ${config.max_upload_mb} МБ и ${config.max_asset_seconds / 60} минут на видео`}
+                          ? `${snapshot.assets.length} sources uploaded. Describe your idea in chat.`
+                          : `Up to ${config.max_upload_mb} MB and ${config.max_asset_seconds / 60} minutes per video`}
                       </p>
                     </div>
                   )}
@@ -859,12 +852,12 @@ function App() {
                     </span>
                     <div>
                       <b>
-                        {story ? "Работаем над историей" : "Режиссёр проекта"}
+                        {story ? "Developing your story" : "Project director"}
                       </b>
                       <small>
                         {config.planning_available
-                          ? "Сценарий · музыка · монтаж"
-                          : "Ожидает подключения AI"}
+                          ? "Story · music · editing"
+                          : "Waiting for AI connection"}
                       </small>
                     </div>
                     <MessageCircle size={17} />
@@ -873,37 +866,35 @@ function App() {
                     {messages.length ? (
                       messages.map((m) => (
                         <div className={`message ${m.role}`} key={m.id}>
-                          <small>{m.role === "user" ? "Вы" : "VMerger"}</small>
+                          <small>{m.role === "user" ? "You" : "VMerger"}</small>
                           <p>{m.text}</p>
                         </div>
                       ))
                     ) : (
                       <div className="chat-welcome">
                         <Sparkles size={28} />
-                        <h3>Какую историю расскажем?</h3>
+                        <h3>What story shall we tell?</h3>
                         <p>
-                          Можно описать настроение, длительность и то, что
-                          особенно хочется сохранить.
+                          Describe the mood, length and moments you want to
+                          keep.
                         </p>
                         <button
                           disabled={!config.planning_available}
                           onClick={() =>
-                            setPrompt(
-                              "Собери короткую историю поездки с тёплым настроением",
-                            )
+                            setPrompt("Create a short, warm story of this trip")
                           }
                         >
-                          Тёплая история поездки <ArrowUp size={14} />
+                          A warm travel story <ArrowUp size={14} />
                         </button>
                         <button
                           disabled={!config.planning_available}
                           onClick={() =>
                             setPrompt(
-                              "Раздели события на несколько коротких историй",
+                              "Split the events into several short stories",
                             )
                           }
                         >
-                          Несколько отдельных историй <ArrowUp size={14} />
+                          Several separate stories <ArrowUp size={14} />
                         </button>
                       </div>
                     )}
@@ -916,21 +907,21 @@ function App() {
                     }}
                   >
                     <textarea
-                      aria-label="Пожелание к видео"
+                      aria-label="Video request"
                       value={prompt}
                       onChange={(e) => setPrompt(e.target.value)}
-                      placeholder="Опишите идею или попросите изменить видео…"
+                      placeholder="Describe an idea or ask for a change…"
                       disabled={!config.planning_available}
                       maxLength={4000}
                     />
                     <footer>
                       <small>
                         {activeJobs.length
-                          ? "Обрабатываем предыдущий запрос"
-                          : "Монтаж — через разговор"}
+                          ? "Working on your previous request"
+                          : "Edit through conversation"}
                       </small>
                       <button
-                        aria-label="Отправить"
+                        aria-label="Send"
                         className="send"
                         disabled={
                           !config.planning_available ||
@@ -955,7 +946,7 @@ function App() {
             className="modal"
             onSubmit={(e) => {
               e.preventDefault();
-              execute("Создаю…", async () => {
+              execute("Creating…", async () => {
                 const p = await api<Project>("/projects", {
                   method: "POST",
                   body: JSON.stringify({ title, brief }),
@@ -969,38 +960,38 @@ function App() {
             }}
           >
             <div className="row">
-              <h2>Новая история начинается здесь</h2>
+              <h2>Your next story starts here</h2>
               <button
                 type="button"
                 className="icon-button"
-                aria-label="Закрыть"
+                aria-label="Close"
                 onClick={() => setCreating(false)}
               >
                 <X size={20} />
               </button>
             </div>
             <label>
-              Название проекта
+              Project title
               <input
                 autoFocus
                 required
                 maxLength={140}
-                placeholder="Например, выходные у моря"
+                placeholder="For example, a weekend by the sea"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />
             </label>
             <label>
-              О чём ваши видео?
+              What is your footage about?
               <textarea
                 maxLength={4000}
-                placeholder="Необязательно. Можно рассказать позже в чате."
+                placeholder="Optional. You can tell us later in chat."
                 value={brief}
                 onChange={(e) => setBrief(e.target.value)}
               />
             </label>
             <button className="primary" disabled={!title.trim() || !!busy}>
-              Создать проект <ChevronRight size={18} />
+              Create project <ChevronRight size={18} />
             </button>
           </form>
         </div>
@@ -1015,10 +1006,10 @@ function EmptyUpload({ onClick }: { onClick: () => void }) {
       <span className="upload-symbol">
         <Upload size={27} />
       </span>
-      <h2>Добавьте моменты вашей истории</h2>
-      <p>Перетащите видео сюда или выберите файлы</p>
+      <h2>Add the moments of your story</h2>
+      <p>Drop videos here or choose files</p>
       <span className="secondary">
-        Выбрать видео <Plus size={16} />
+        Choose videos <Plus size={16} />
       </span>
     </button>
   );
@@ -1046,48 +1037,48 @@ function Metrics({ data }: { data: Snapshot }) {
     <div className="metrics">
       <div className="section-heading">
         <div>
-          <h2>Проверяем результат, а не обещания</h2>
+          <h2>Measured results</h2>
           <p className="muted">
-            Фактические наблюдения этого проекта. N — число измерений, не
-            независимых проектов.
+            Actual observations for this project. N counts measurements, not
+            independent projects.
           </p>
         </div>
-        <span className="badge">{data.eval_results.length} наблюдений</span>
+        <span className="badge">{data.eval_results.length} observations</span>
       </div>
       <div className="metric-grid">
         <Metric
-          name="Валидность планов"
+          name="Plan validity"
           value={
             plan.value === null ? "—" : `${(plan.value * 100).toFixed(0)}%`
           }
-          note={`N=${plan.n} · правила и границы исходников`}
+          note={`N=${plan.n} · rules and source bounds`}
         />
         <Metric
-          name="Полное декодирование"
+          name="Full decoding"
           value={
             decode.value === null ? "—" : `${(decode.value * 100).toFixed(0)}%`
           }
-          note={`N=${decode.n} · проверка готового файла`}
+          note={`N=${decode.n} · output file verification`}
         />
         <Metric
-          name="Задержка AI, p95"
+          name="AI latency, p95"
           value={
             percentile(times, 0.95) === null
               ? "—"
-              : `${percentile(times, 0.95)!.toFixed(1)} с`
+              : `${percentile(times, 0.95)!.toFixed(1)} s`
           }
-          note={`N=${times.length} · вызовы, включая ошибки`}
+          note={`N=${times.length} · calls, including failures`}
         />
         <Metric
-          name="Стоимость"
+          name="Cost"
           value="—"
-          note="Нет проверенного прайсинга · не считается нулём"
+          note="Pricing unverified · not counted as zero"
         />
       </div>
       <div className="chart-grid">
         <div className="chart-card">
-          <h3>Время вызова агента</h3>
-          <p>Секунды · каждый вызов</p>
+          <h3>Agent call latency</h3>
+          <p>Seconds · per call</p>
           {latency.length ? (
             <ResponsiveContainer width="100%" height={230}>
               <LineChart data={latency}>
@@ -1098,7 +1089,7 @@ function Metrics({ data }: { data: Snapshot }) {
                 <Line
                   type="linear"
                   dataKey="seconds"
-                  name="Секунды"
+                  name="Seconds"
                   stroke="#3e8c70"
                   strokeWidth={2}
                   dot
@@ -1107,15 +1098,15 @@ function Metrics({ data }: { data: Snapshot }) {
             </ResponsiveContainer>
           ) : (
             <div className="chart-empty">
-              Вызовов ещё не было.
+              No calls yet.
               <br />
-              График появится после работы агентов.
+              The chart appears after agents run.
             </div>
           )}
         </div>
         <div className="chart-card">
-          <h3>Отклонение длительности рендера</h3>
-          <p>|Фактическая − плановая| · секунды</p>
+          <h3>Render duration error</h3>
+          <p>|Actual − planned| · seconds</p>
           {series.length ? (
             <ResponsiveContainer width="100%" height={230}>
               <LineChart data={series}>
@@ -1126,7 +1117,7 @@ function Metrics({ data }: { data: Snapshot }) {
                 <Line
                   type="linear"
                   dataKey="seconds"
-                  name="Отклонение, с"
+                  name="Error, s"
                   stroke="#b98a45"
                   strokeWidth={2}
                   dot
@@ -1135,9 +1126,9 @@ function Metrics({ data }: { data: Snapshot }) {
             </ResponsiveContainer>
           ) : (
             <div className="chart-empty">
-              Рендеров ещё не было.
+              No renders yet.
               <br />
-              Здесь будут измерения FFmpeg.
+              FFmpeg measurements will appear here.
             </div>
           )}
         </div>
@@ -1145,35 +1136,33 @@ function Metrics({ data }: { data: Snapshot }) {
       <div className="quality-note">
         <Check size={19} />
         <div>
-          <b>
-            Автоматические проверки и творческое качество — отдельные оценки
-          </b>
+          <b>Technical checks and creative quality are measured separately</b>
           <p>
-            Валидный план не доказывает, что фильм хороший. Сюжет, уместность
-            музыки и точность ревью требуют размеченных примеров и человеческих
-            оценок. Для них пока нет результатов и доверительных интервалов.
+            A valid plan does not establish film quality. Storytelling, music
+            fit and review accuracy need labeled examples and human ratings. No
+            results or confidence intervals are available yet.
           </p>
         </div>
       </div>
-      <h3>История обработки</h3>
+      <h3>Processing history</h3>
       {data.jobs.length ? (
         <div className="job-table">
           {data.jobs.map((j) => (
             <div key={j.id}>
               <b>{operations[j.kind] || j.kind}</b>
-              <span>Попытка {j.attempt}</span>
+              <span>Attempt {j.attempt}</span>
               <span className={`badge ${j.status}`}>{labels[j.status]}</span>
               {j.error && <small>{j.error.type}</small>}
             </div>
           ))}
         </div>
       ) : (
-        <p className="muted">Обработка ещё не запускалась.</p>
+        <p className="muted">Processing has not started yet.</p>
       )}
       {failed.length > 0 && (
         <p className="error">
-          Неудачных заданий: {failed.length}. Они сохранены в истории и не
-          скрыты из статистики.
+          Failed jobs: {failed.length}. They remain in the history and are
+          included in statistics.
         </p>
       )}
     </div>
