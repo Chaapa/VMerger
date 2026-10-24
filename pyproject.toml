@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "vmerger"
 version = "0.1.0"
 description = "Chat-directed video stories with private S3 media storage"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
 dependencies = ["fastapi", "uvicorn", "pydantic-settings", "psycopg[binary]", "boto3", "google-genai", "httpx", "python-dotenv", "alembic", "prometheus-client", "itsdangerous"]
 

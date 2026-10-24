@@ -7,9 +7,10 @@ COPY web/ ./
 RUN pnpm run build
 
 FROM python:3.12-slim-bookworm
+LABEL org.opencontainers.image.licenses="MIT"
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY requirements.lock pyproject.toml ./
+COPY requirements.lock pyproject.toml LICENSE ./
 RUN pip install --no-cache-dir -r requirements.lock
 COPY vmerger/ vmerger/
 COPY migrations/ migrations/
