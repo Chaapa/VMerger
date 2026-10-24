@@ -12,9 +12,11 @@ from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
 from . import media, storage
+from .ai_config import public_status
 from .config import settings
 from .contracts import StrictModel, canonical_hash
 from .db import connect, enqueue, jsonb
+from .providers import ProviderRouter
 
 app = FastAPI(title="VMerger", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -103,8 +105,7 @@ def logout(response: Response):
 @app.get("/api/config")
 def config(user=Depends(owner)):
     return {
-        "ai_available": bool(settings().gemini_api_key),
-        "model": settings().gemini_model,
+        **public_status(),
         "max_upload_mb": settings().max_upload_mb,
         "max_asset_seconds": settings().max_asset_seconds,
         "authentication": "single-owner",
@@ -235,7 +236,7 @@ async def upload(project_id: UUID, request: Request, name: str, license_note: st
                 ).fetchone()
                 if info["kind"] == "audio":
                     conn.execute("UPDATE assets SET status='ready' WHERE id=%s", (asset["id"],))
-                elif settings().gemini_api_key:
+                elif public_status()["analysis_available"]:
                     enqueue(
                         conn, project_id, "analyze_asset", {"asset_id": str(asset["id"])}, str(asset["id"])
                     )
@@ -269,8 +270,8 @@ class ChatMessage(StrictModel):
 
 @app.post("/api/projects/{project_id}/messages", status_code=202)
 def message(project_id: UUID, body: ChatMessage, user=Depends(owner)):
-    if not settings().gemini_api_key:
-        raise HTTPException(503, "Add GEMINI_API_KEY to .env and restart API and worker to enable AI")
+    if not public_status()["planning_available"]:
+        raise HTTPException(503, "Configure the creative AI routes and their credentials")
     fingerprint = canonical_hash(body.model_dump(mode="json"))
     with connect() as conn:
         project_access(conn, project_id, user, lock=True)
@@ -320,8 +321,8 @@ def message(project_id: UUID, body: ChatMessage, user=Depends(owner)):
 
 @app.post("/api/projects/{project_id}/analyze", status_code=202)
 def analyze_pending(project_id: UUID, user=Depends(owner)):
-    if not settings().gemini_api_key:
-        raise HTTPException(503, "Gemini is not configured")
+    if not public_status()["analysis_available"]:
+        raise HTTPException(503, "Configure analysis and embedding providers")
     with connect() as conn:
         project_access(conn, project_id, user, lock=True)
         assets = conn.execute(
@@ -396,12 +397,20 @@ def search(project_id: UUID, q: str, semantic: bool = False, user=Depends(owner)
     with connect() as conn:
         project_access(conn, project_id, user)
     if semantic:
-        if not settings().gemini_api_key:
-            raise HTTPException(503, "Gemini is not configured")
-        from .providers import Gemini
-
+        if not public_status()["embedding_available"]:
+            raise HTTPException(503, "Configure an embedding provider")
+        provider = ProviderRouter({"project_id": project_id, "id": None})
+        with connect() as conn:
+            missing = conn.execute(
+                """SELECT 1 FROM segments s LEFT JOIN segment_embeddings e
+                ON e.segment_id=s.id AND e.profile_key=%s
+                WHERE s.project_id=%s AND e.segment_id IS NULL LIMIT 1""",
+                (provider.embedding_profile, project_id),
+            ).fetchone()
+        if missing:
+            raise HTTPException(409, "Reindex this project's embeddings for the selected profile first")
         try:
-            vector = Gemini({"project_id": project_id, "id": None}).embed([q], query=True)[0]
+            vector = provider.embed([q], query=True)[0]
         except Exception:
             raise HTTPException(503, "Semantic search provider unavailable") from None
         with connect() as conn:
@@ -413,7 +422,7 @@ def search(project_id: UUID, q: str, semantic: bool = False, user=Depends(owner)
                 SELECT s.id,s.asset_id,s.start_us,s.end_us,s.description,
                 1-(e.embedding <=> %s::vector) score FROM scoped e JOIN segments s ON s.id=e.segment_id
                 ORDER BY e.embedding <=> %s::vector,s.id LIMIT 30""",
-                (project_id, settings().embedding_profile, str(vector), str(vector)),
+                (project_id, provider.embedding_profile, str(vector), str(vector)),
             ).fetchall()
     with connect() as conn:
         return conn.execute(
@@ -423,6 +432,24 @@ def search(project_id: UUID, q: str, semantic: bool = False, user=Depends(owner)
             ORDER BY score DESC,id LIMIT 30""",
             (q, project_id, q),
         ).fetchall()
+
+
+@app.post("/api/projects/{project_id}/embeddings/reindex", status_code=202)
+def reindex(project_id: UUID, user=Depends(owner)):
+    status = public_status()
+    if not status["embedding_available"]:
+        raise HTTPException(503, "Configure an embedding provider")
+    profile = status["embedding_profile"]
+    with connect() as conn:
+        project_access(conn, project_id, user, lock=True)
+        active = conn.execute(
+            """SELECT * FROM jobs WHERE project_id=%s AND kind='reindex_embeddings'
+            AND status IN ('queued','running') AND input->>'profile'=%s""",
+            (project_id, profile),
+        ).fetchone()
+        if active:
+            return active
+        return enqueue(conn, project_id, "reindex_embeddings", {"profile": profile}, str(uuid4()))
 
 
 @app.get("/livez")
@@ -436,7 +463,7 @@ def ready():
         with connect() as conn:
             conn.execute("SELECT 1 FROM alembic_version").fetchone()
         storage.client().head_bucket(Bucket=settings().s3_bucket)
-        return {"status": "ready", "ai_available": bool(settings().gemini_api_key)}
+        return {"status": "ready", "ai_available": public_status()["ai_available"]}
     except Exception:
         return JSONResponse({"status": "unavailable"}, status_code=503)
 

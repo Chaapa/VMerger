@@ -72,6 +72,15 @@ const operations: Record<string, string> = {
   analyze_asset: "Анализ видео",
   apply_message: "Работа над историей",
   render_version: "Сборка видео",
+  reindex_embeddings: "Обновление смыслового поиска",
+};
+const aiRoles: Record<string, string> = {
+  analyst: "Аналитик видео",
+  director: "Режиссёр",
+  music: "Музыкальный агент",
+  editor: "Монтажёр",
+  reviewer: "Ревьюер",
+  embedding: "Смысловой поиск",
 };
 
 function App() {
@@ -80,9 +89,17 @@ function App() {
   const [token, setToken] = useState("");
   const [config, setConfig] = useState({
     ai_available: false,
+    analysis_available: false,
+    planning_available: false,
+    embedding_available: false,
+    analysis_mode: "",
+    config_error: false,
+    routes: {} as Record<
+      string,
+      { provider: string; model: string; configured: boolean }
+    >,
     max_upload_mb: 500,
     max_asset_seconds: 600,
-    model: "",
   });
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -513,10 +530,17 @@ function App() {
               <div className="notice">
                 <Sparkles size={18} />
                 <div>
-                  <b>AI пока не подключён</b>
+                  <b>
+                    {config.config_error
+                      ? "Не удалось прочитать настройки AI"
+                      : config.planning_available || config.analysis_available
+                        ? "Часть AI-ролей не настроена"
+                        : "AI пока не подключён"}
+                  </b>
                   <span>
-                    Загрузка и хранение работают. Анализ и сборка из чата станут
-                    доступны после настройки Gemini.
+                    Загрузка и хранение работают. Доступность анализа и сборки
+                    зависит от настроенных ролей — они показаны во вкладке
+                    качества.
                   </span>
                 </div>
               </div>
@@ -570,7 +594,29 @@ function App() {
               </div>
             )}
             {tab === "metrics" ? (
-              <Metrics data={snapshot} />
+              <>
+                <div className="sources">
+                  <h2>AI-команда</h2>
+                  <p className="muted">
+                    Текущие модели по ролям. Наличие ключа ещё не подтверждает
+                    доступность API.
+                  </p>
+                  <div className="job-table">
+                    {Object.entries(config.routes).map(([role, route]) => (
+                      <div key={role}>
+                        <b>{aiRoles[role] || role}</b>
+                        <span>
+                          {route.provider} · {route.model}
+                        </span>
+                        <span className="badge">
+                          {route.configured ? "Настроен" : "Нужен ключ"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <Metrics data={snapshot} />
+              </>
             ) : tab === "sources" ? (
               <div className="sources">
                 <div className="section-heading">
@@ -578,7 +624,9 @@ function App() {
                   <div className="row">
                     <button
                       className="secondary"
-                      disabled={!config.ai_available || !!activeJobs.length}
+                      disabled={
+                        !config.analysis_available || !!activeJobs.length
+                      }
                       onClick={() =>
                         execute("Запускаю анализ…", async () => {
                           await api(`/projects/${selected}/analyze`, {
@@ -592,12 +640,38 @@ function App() {
                     </button>
                     <button
                       className="secondary"
+                      disabled={
+                        !config.embedding_available ||
+                        !!activeJobs.length ||
+                        !!busy
+                      }
+                      title="Обновить эмбеддинги после смены модели поиска"
+                      onClick={() =>
+                        execute("Обновляю поиск…", async () => {
+                          await api(
+                            `/projects/${selected}/embeddings/reindex`,
+                            { method: "POST" },
+                          );
+                          await refresh();
+                        })
+                      }
+                    >
+                      Обновить поиск
+                    </button>
+                    <button
+                      className="secondary"
                       onClick={() => setShowMusic(!showMusic)}
                     >
                       Добавить музыку
                     </button>
                   </div>
                 </div>
+                {config.analysis_mode === "sampled_frames" && (
+                  <p className="muted">
+                    Анализ по выборке кадров: без распознавания речи, короткие
+                    события могут быть пропущены.
+                  </p>
+                )}
                 {showMusic && (
                   <div className="music-form">
                     <label>
@@ -772,7 +846,7 @@ function App() {
                         {story ? "Работаем над историей" : "Режиссёр проекта"}
                       </b>
                       <small>
-                        {config.ai_available
+                        {config.planning_available
                           ? "Сценарий · музыка · монтаж"
                           : "Ожидает подключения AI"}
                       </small>
@@ -796,7 +870,7 @@ function App() {
                           особенно хочется сохранить.
                         </p>
                         <button
-                          disabled={!config.ai_available}
+                          disabled={!config.planning_available}
                           onClick={() =>
                             setPrompt(
                               "Собери короткую историю поездки с тёплым настроением",
@@ -806,7 +880,7 @@ function App() {
                           Тёплая история поездки <ArrowUp size={14} />
                         </button>
                         <button
-                          disabled={!config.ai_available}
+                          disabled={!config.planning_available}
                           onClick={() =>
                             setPrompt(
                               "Раздели события на несколько коротких историй",
@@ -830,7 +904,7 @@ function App() {
                       value={prompt}
                       onChange={(e) => setPrompt(e.target.value)}
                       placeholder="Опишите идею или попросите изменить видео…"
-                      disabled={!config.ai_available}
+                      disabled={!config.planning_available}
                       maxLength={4000}
                     />
                     <footer>
@@ -843,7 +917,7 @@ function App() {
                         aria-label="Отправить"
                         className="send"
                         disabled={
-                          !config.ai_available ||
+                          !config.planning_available ||
                           !prompt.trim() ||
                           !!busy ||
                           !!activeJobs.length

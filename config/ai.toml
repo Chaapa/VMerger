@@ -1,0 +1,34 @@
+# Provider names are arbitrary. Secrets are referenced by environment variable name.
+# Changes apply to the next job; a running job keeps its configuration snapshot.
+frame_samples = 12
+max_output_tokens = 12000
+
+[providers.google]
+adapter = "gemini"
+api_key_env = "GEMINI_API_KEY"
+
+# Set your actual endpoint and AI_API_KEY in .env, then route roles to "gateway".
+[providers.gateway]
+adapter = "openai_compatible"
+base_url = "https://your-gateway.example/v1"
+api_key_env = "AI_API_KEY"
+response_format = "json_schema" # or json_object for endpoints without schema support
+token_parameter = "max_completion_tokens" # some servers require max_tokens
+send_dimensions = true # false only for models that natively emit exactly 768 values
+
+[default]
+provider = "google"
+model = "gemini-3.8-flash"
+
+# Omitted creative roles inherit [default]. Each role can use its own provider/model.
+# [routes.reviewer]
+# provider = "gateway"
+# model = "your-model-id"
+
+[routes.analyst]
+provider = "google"
+model = "gemini-3.8-flash"
+
+[routes.embedding]
+provider = "google"
+model = "gemini-embedding-001"

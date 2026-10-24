@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.8-flash"
     embedding_model: str = "gemini-embedding-001"
+    ai_config_file: Path | None = Path("config/ai.toml")
     app_token: str
     app_origin: str = "http://127.0.0.1:8000"
     cookie_secure: bool = False
@@ -26,11 +27,6 @@ class Settings(BaseSettings):
     max_project_assets: int = 30
     max_output_seconds: int = 300
     lease_seconds: int = 120
-
-    @property
-    def embedding_profile(self) -> str:
-        return f"{self.embedding_model}:text-v1:768"
-
 
 @lru_cache
 def settings() -> Settings:

@@ -7,15 +7,16 @@ from vmerger import jobs, pipeline
 from vmerger.config import settings
 from vmerger.contracts import Analysis, MusicChoice, ProjectPlan, Review, Scene, StoryPlan
 from vmerger.db import connect, enqueue, jsonb
+from vmerger.providers import ProviderRouter
 
 pytestmark = pytest.mark.integration
 
 
-class FixtureProvider:
+class FixtureProvider(ProviderRouter):
     """Deterministic contract fixture; never presented as an AI quality benchmark."""
 
     def __init__(self, job):
-        self.job = job
+        super().__init__(job)
 
     def analyze(self, path, duration):
         assert path.exists() and path.stat().st_size > 0
@@ -66,7 +67,7 @@ def test_real_pipeline_roundtrip_versions_and_metrics(client, project, videos, m
     assert len(client.get(prefix + "/search?q=beach").json()) == 2
     with monkeypatch.context() as patch:
         patch.setattr(
-            "vmerger.providers.Gemini.embed", lambda self, texts, query=False: [[1.0] + [0.0] * 767]
+            "vmerger.providers.ProviderRouter.embed", lambda self, texts, query=False: [[1.0] + [0.0] * 767]
         )
         assert len(client.get(prefix + "/search?q=beach&semantic=true").json()) == 2
     with connect() as conn:
@@ -110,6 +111,58 @@ def test_real_pipeline_roundtrip_versions_and_metrics(client, project, videos, m
     assert any(e["metric"] == "decode_pass" and e["value"] == 1 for e in snapshot["eval_results"])
     assert b"vmerger_jobs" in client.get("/api/metrics").content
     assert client.get("/readyz").status_code == 200
+
+
+def test_embedding_switch_requires_reindex_and_preserves_old_profile(
+    client, project, videos, monkeypatch, tmp_path
+):
+    prefix = f"/api/projects/{project['id']}"
+    client.post(prefix + "/assets?name=fixture.mp4", content=videos[0][0].read_bytes())
+    monkeypatch.setattr(settings(), "gemini_api_key", "test-fixture-no-network")
+    assert client.post(prefix + "/analyze").status_code == 202
+    drain()
+    old_profile = ProviderRouter({}).embedding_profile
+    config = tmp_path / "ai.toml"
+    config.write_text(
+        settings()
+        .ai_config_file.read_text()
+        .replace('model = "gemini-embedding-001"', 'model = "fixture-new-embedding"')
+    )
+    monkeypatch.setattr(settings(), "ai_config_file", config)
+    new_profile = ProviderRouter({}).embedding_profile
+    assert new_profile != old_profile
+    assert client.get(prefix + "/search?q=beach&semantic=true").status_code == 409
+    first = client.post(prefix + "/embeddings/reindex")
+    assert first.status_code == 202
+    assert client.post(prefix + "/embeddings/reindex").json()["id"] == first.json()["id"]
+    drain()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT profile_key,count(*) n FROM segment_embeddings WHERE project_id=%s GROUP BY profile_key",
+            (project["id"],),
+        ).fetchall()
+    assert {row["profile_key"]: row["n"] for row in rows} == {old_profile: 1, new_profile: 1}
+    monkeypatch.setattr(
+        ProviderRouter, "embed", lambda self, texts, query=False: [[1.0] + [0.0] * 767 for _ in texts]
+    )
+    assert len(client.get(prefix + "/search?q=beach&semantic=true").json()) == 1
+    # Repeated reindexing skips existing rows and does not replace source analysis.
+    assert client.post(prefix + "/embeddings/reindex").status_code == 202
+    drain()
+    with connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) n FROM segments WHERE project_id=%s", (project["id"],)).fetchone()[
+                "n"
+            ]
+            == 1
+        )
+    # A queued reindex cannot silently switch to a different model before execution.
+    assert client.post(prefix + "/embeddings/reindex").status_code == 202
+    config.write_text(config.read_text().replace("fixture-new-embedding", "fixture-third-embedding"))
+    job = jobs.claim()
+    with pytest.raises(ValueError, match="configuration changed"):
+        pipeline.process(job, FixtureProvider)
+    jobs.fail(job, ValueError())
 
 
 def test_auth_csrf_and_cross_project_scope(client, project):

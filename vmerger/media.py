@@ -107,6 +107,23 @@ EFFECTS = {
 }
 
 
+def sample_frames(source: Path, duration: float, count: int):
+    """Bounded JPEG samples with source timestamps; never claim audio support."""
+    if not 0 < duration <= settings().max_asset_seconds or not 2 <= count <= 24:
+        raise ValueError("Invalid frame sampling budget")
+    for i in range(count):
+        timestamp = duration * (i + 0.5) / count
+        jpeg = run(command() + [
+            "-protocol_whitelist", "file,pipe", "-format_whitelist", FORMATS,
+            "-ss", str(timestamp), "-i", str(source), "-frames:v", "1",
+            "-vf", "scale=512:512:force_original_aspect_ratio=decrease",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
+        ], timeout=30)
+        if not jpeg or len(jpeg) > 1024 * 1024:
+            raise ValueError("Frame sample is missing or too large")
+        yield timestamp, jpeg
+
+
 def render(plan: StoryPlan, paths: dict[str, Path], assets: dict, directory: Path) -> tuple[Path, float]:
     parts = []
     for i, clip in enumerate(plan.clips):

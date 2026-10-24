@@ -6,7 +6,7 @@ from . import jobs, media, storage
 from .config import settings
 from .contracts import MusicChoice, ProjectPlan, Review, StoryPlan, canonical_hash, validate_plan
 from .db import connect, enqueue, jsonb
-from .providers import Gemini, context_json
+from .providers import ProviderRouter, context_json
 
 
 def assets_for(project_id):
@@ -34,7 +34,7 @@ def analyze(job, provider):
         vectors = provider.embed([s.description + " " + s.speech for s in analysis.scenes])
         if len(vectors) != len(analysis.scenes):
             raise ValueError("Provider returned incomplete embeddings")
-    fingerprint = canonical_hash({"model": settings().gemini_model, "analysis": analysis.model_dump()})
+    fingerprint = canonical_hash({"route": provider.describe("analyst"), "analysis": analysis.model_dump()})
     with connect() as conn:
         jobs.fence(conn, job)
         # An already analyzed source is immutable; duplicate analyze jobs do not duplicate scenes.
@@ -59,12 +59,13 @@ def analyze(job, provider):
             ).fetchone()["id"]
             conn.execute(
                 """INSERT INTO segment_embeddings(project_id,segment_id,profile_key,provider,model,
-                content_sha256,embedding) VALUES (%s,%s,%s,'gemini',%s,%s,%s::vector)""",
+                content_sha256,embedding) VALUES (%s,%s,%s,%s,%s,%s,%s::vector)""",
                 (
                     job["project_id"],
                     segment,
-                    settings().embedding_profile,
-                    settings().embedding_model,
+                    provider.embedding_profile,
+                    provider.describe("embedding")["provider"],
+                    provider.describe("embedding")["model"],
                     canonical_hash(text),
                     str(vector),
                 ),
@@ -310,7 +311,40 @@ def render_version(job):
         raise
 
 
-def process(job, provider_factory=Gemini):
+def reindex_embeddings(job, provider):
+    profile = provider.embedding_profile
+    if job["input"]["profile"] != profile:
+        raise ValueError("Embedding configuration changed; request reindexing again")
+    while True:
+        with connect() as conn:
+            jobs.fence(conn, job)
+            rows = conn.execute(
+                """SELECT s.id,s.search_text FROM segments s
+                LEFT JOIN segment_embeddings e ON e.segment_id=s.id AND e.profile_key=%s
+                WHERE s.project_id=%s AND e.segment_id IS NULL ORDER BY s.id LIMIT 32""",
+                (profile, job["project_id"]),
+            ).fetchall()
+        if not rows:
+            break
+        vectors = provider.embed([row["search_text"] for row in rows])
+        if len(vectors) != len(rows):
+            raise ValueError("Provider returned incomplete embeddings")
+        with connect() as conn:
+            jobs.fence(conn, job)
+            for row, vector in zip(rows, vectors, strict=True):
+                conn.execute(
+                    """INSERT INTO segment_embeddings(project_id,segment_id,profile_key,provider,model,
+                    content_sha256,embedding) VALUES (%s,%s,%s,%s,%s,%s,%s::vector)
+                    ON CONFLICT(segment_id,profile_key) DO NOTHING""",
+                    (job["project_id"], row["id"], profile, provider.describe("embedding")["provider"],
+                     provider.describe("embedding")["model"], canonical_hash(row["search_text"]), str(vector)),
+                )
+    with connect() as conn:
+        jobs.fence(conn, job)
+        jobs.succeed(conn, job)
+
+
+def process(job, provider_factory=ProviderRouter):
     settings().scratch_dir.mkdir(parents=True, exist_ok=True)
     with jobs.keep_alive(job):
         if job["kind"] == "analyze_asset":
@@ -319,5 +353,7 @@ def process(job, provider_factory=Gemini):
             plan(job, provider_factory(job))
         elif job["kind"] == "render_version":
             render_version(job)
+        elif job["kind"] == "reindex_embeddings":
+            reindex_embeddings(job, provider_factory(job))
         else:
             raise ValueError("Unsupported job kind")

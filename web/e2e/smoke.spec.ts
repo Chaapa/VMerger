@@ -47,14 +47,20 @@ test("real workspace, empty metrics, dark theme and mobile layout", async ({
     JSON.stringify({ id: project.id }),
   );
   await expect(
-    page.getByRole("heading", { name: "Локальная проверка" }),
+    page.getByRole("heading", { name: "Локальная проверка", level: 1 }),
   ).toBeVisible();
   await expect(page.getByLabel("Пожелание к видео")).toBeDisabled();
   await page.screenshot({
     path: resolve(root, "docs/images/project.png"),
     fullPage: true,
   });
+  await page.getByRole("button", { name: /Материалы/ }).click();
+  await expect(page.getByRole("button", { name: "Проанализировать", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Обновить поиск", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Качество и работа агентов" }).click();
+  await expect(page.getByRole("heading", { name: "AI-команда" })).toBeVisible();
+  await expect(page.getByText("Аналитик видео", { exact: true })).toBeVisible();
+  await expect(page.getByText("Ревьюер", { exact: true })).toBeVisible();
   await expect(page.getByText("Вызовов ещё не было.")).toBeVisible();
   await expect(page.getByText("0 наблюдений")).toBeVisible();
   await page.screenshot({

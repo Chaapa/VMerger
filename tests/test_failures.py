@@ -8,7 +8,7 @@ from vmerger import jobs, pipeline, worker
 from vmerger.config import settings
 from vmerger.contracts import Review, StoryPlan
 from vmerger.db import connect, enqueue, jsonb
-from vmerger.providers import Gemini
+from vmerger.providers import ProviderRouter
 
 pytestmark = pytest.mark.integration
 
@@ -81,7 +81,7 @@ def test_provider_adapter_records_success_and_failure_without_network(project, m
             return SimpleNamespace(embeddings=[SimpleNamespace(values=[2.0] + [0.0] * 767)])
 
     monkeypatch.setattr("vmerger.providers.genai.Client", lambda **kw: SimpleNamespace(models=Models()))
-    provider = Gemini(job)
+    provider = ProviderRouter(job)
     assert provider.call("reviewer", "Fixture prompt", Review).approved
     assert provider.embed(["fixture"])[0][0] == 1
     assert provider.embed(["fixture"], query=True)[0][0] == 1
@@ -89,10 +89,10 @@ def test_provider_adapter_records_success_and_failure_without_network(project, m
     def fail(**kwargs):
         raise TimeoutError("Do not store this provider body")
 
-    monkeypatch.setattr(provider.client.models, "generate_content", fail)
+    monkeypatch.setattr(provider.adapter("reviewer").client.models, "generate_content", fail)
     with pytest.raises(TimeoutError):
         provider.call("reviewer", "Fixture prompt", Review)
-    monkeypatch.setattr(provider.client.models, "embed_content", fail)
+    monkeypatch.setattr(provider.adapter("embedding").client.models, "embed_content", fail)
     with pytest.raises(TimeoutError):
         provider.embed(["fixture"])
     with connect() as conn:

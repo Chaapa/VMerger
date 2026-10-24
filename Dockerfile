@@ -15,6 +15,7 @@ COPY vmerger/ vmerger/
 COPY migrations/ migrations/
 COPY docs/schema.sql docs/schema.sql
 COPY alembic.ini ./
+COPY config/ config/
 COPY --from=web /web/dist web/dist
 RUN useradd --uid 10001 --create-home vmerger
 USER vmerger
