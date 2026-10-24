@@ -12,7 +12,7 @@ The engineering work I found most interesting was making the workflow safe to re
 
 The local validation uses real PostgreSQL, SeaweedFS and FFmpeg. It covers authentication boundaries, concurrent workers, expired leases, stale renders, deduplication, version history and playback ranges. Deterministic provider fixtures verify orchestration; they are explicitly separate from evaluating the creative quality of a live model.
 
-It is an alpha, with a working interface and server deployment configuration. The next step is a live Gemini evaluation on consented footage, followed by resumable uploads and a labelled quality dataset.
+Each AI role has an independent provider/model route. Gemini and OpenAI-compatible adapters share validation and audit; embedding profiles remain isolated when models change. It is an alpha, with a working interface and server deployment configuration. The next step is a live evaluation of selected providers on consented footage, followed by resumable uploads and a labelled quality dataset.
 
 Repository: https://github.com/Chaapa/VMerger
 
@@ -20,7 +20,7 @@ Repository: https://github.com/Chaapa/VMerger
 
 1. Open the real workspace and create a project.
 2. Upload two short permitted clips and show that originals are stored in private S3.
-3. With a configured Gemini key, analyze the clips, request a story and inspect the completed video. Until this step is actually tested, do not claim it has passed live validation.
+3. Show the provider/model routes, configure their keys, analyze the clips, request a story and inspect the completed video. Until this step is actually tested, do not claim it has passed live validation.
 4. Request one change in chat and show immutable version history.
 5. Open the quality tab, explain which measurements are mechanical, which come from the model and which require people.
 6. Show the real test/CI results and the deployment instructions.
