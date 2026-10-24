@@ -5,6 +5,7 @@
 A self-hosted video-editing prototype: upload clips, describe the film you want, then request changes in chat. A director, music selector, editing agent and reviewer produce a validated edit plan. FFmpeg renders it; the user never operates a timeline.
 
 [![Verify](https://github.com/Chaapa/VMerger/actions/workflows/ci.yml/badge.svg)](https://github.com/Chaapa/VMerger/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ![The running VMerger project workspace](docs/images/project.png)
 
@@ -17,6 +18,7 @@ A self-hosted video-editing prototype: upload clips, describe the film you want,
 - PostgreSQL + pgvector scene catalog, full-text and scoped semantic search, immutable plans and version history.
 - Four creative roles with structured outputs and deterministic checks of source IDs, clip ranges, effects and music provenance.
 - A shared AI router with Gemini and OpenAI-compatible adapters, independent models per role and isolated embedding profiles.
+- Self-hosted inference endpoints and opt-in creative-agent failover to an already running backup, including a rented GPU behind SSH.
 - Durable PostgreSQL jobs, concurrent claims, lease heartbeats, cancellation and fenced result publication.
 - FFmpeg assembly with audio normalization of format, silence for silent clips, optional music mixing, allowlisted effects and full output decoding.
 - Real per-project observations and charts, provider call history, Prometheus metrics, Grafana dashboard and alert rules.
@@ -152,6 +154,25 @@ The compatible adapter uses Chat Completions and Embeddings HTTP contracts. Its 
 
 Changing an embedding model, compatible endpoint or text prefixes selects a different profile. Click **Материалы → Обновить поиск** to populate it from existing scene text. Old vectors and videos remain intact; semantic search refuses an incomplete profile instead of comparing incompatible vectors.
 
+### Your own LLM and GPU fallback
+
+Run a compatible model server such as vLLM on your own GPU or a rented machine on Vast.ai. VMerger connects from your server over a private endpoint or SSH tunnel. The following chain is configurable independently for the director, music, editor and reviewer roles:
+
+```mermaid
+flowchart TB
+    W["VMerger worker on your server"] --> P["Primary API or self-hosted LLM"]
+    P -->|"Network error, timeout, 429 or 5xx"| L["Backup 1: your GPU"]
+    L -->|"Transient failure"| T["Backup 2: SSH tunnel to running Vast GPU"]
+    P --> V["Schema + plan validation"]
+    L --> V
+    T --> V
+    V --> R["FFmpeg render → private S3"]
+```
+
+Fallback is disabled by default and limited to two explicitly configured backups. Every attempt is audited against its actual provider/model. Invalid output, refusals and credential errors stop the call. Analyst and embedding routes remain explicit to preserve media capabilities and vector-space compatibility. See the [hybrid configuration example](config/ai.hybrid.example.toml) and [self-hosting / Vast.ai deployment guide](docs/self-hosted-llm.md).
+
+**Automatic GPU rental is a documented next step, not shipped behavior.** The guide separates a running backup endpoint from a future controller that rents capacity, waits for model readiness, resumes queued work and releases idle instances under a spending limit. No GPU rental or live-model validation has been performed for this release.
+
 ## Run with Docker
 
 Requires Docker Engine with Compose, Python 3 for configuration generation, and enough local disk for footage and temporary renders.
@@ -207,9 +228,14 @@ Multi-user OIDC, resumable direct-to-S3 uploads, full deletion/reconciliation, s
 - [Architecture and schema](docs/architecture.md)
 - [Agent roles and effects](docs/agents-and-effects.md)
 - [Provider routing and model switching](docs/providers.md)
+- [Self-hosted LLMs, failover and Vast.ai](docs/self-hosted-llm.md)
 - [Evaluation formulas and acceptance criteria](docs/agent-evaluation.md)
 - [Quality and operations design](docs/quality-and-operations.md)
 - [Implementation decisions and deviations](docs/implementation.md)
 - [Portfolio narrative draft](docs/portfolio.md)
 
 The commit sequence groups the implementation into milestones.
+
+## License
+
+[MIT](LICENSE). Anyone may use, modify, redistribute and sell this software, including in commercial products, while retaining the copyright and license notice. Model weights, dependencies and imported media keep their own licenses.

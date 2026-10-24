@@ -56,9 +56,26 @@ model = "your-loaded-chat-model"
 
 From a container, `127.0.0.1` means that container, so use the inference service's reachable hostname instead. A local vision model can also be assigned to `analyst`; a text-only model cannot analyze frames. An embedding model must support the Embeddings endpoint and the current 768-dimensional schema. Providers with a different native API need another adapter; they are not automatically supported by renaming a model.
 
-Configuration is loaded when a job attempt starts, and each router holds that snapshot throughout the attempt. There is no silent fallback to another provider, which would change data destination and semantics. A retry starts a new attempt with current configuration. Config file edits need no rebuild; environment/secret changes require restarting API and worker. Replace config files atomically during deployment to avoid reading partially written TOML. An invalid file disables AI availability without disabling uploads or playback.
+Configuration is loaded when a job attempt starts, and each router holds that snapshot throughout the attempt. Fallback is disabled unless explicitly configured for a creative role. A retry starts a new attempt with current configuration. Config file edits need no rebuild; environment/secret changes require restarting API and worker. Replace config files atomically during deployment to avoid reading partially written TOML. An invalid file disables AI availability without disabling uploads or playback.
 
 Legacy installations can explicitly set `settings.ai_config_file=None` programmatically to use the old Gemini settings; normal deployments use TOML. `GEMINI_MODEL` and `EMBEDDING_MODEL` do not override configured TOML routes.
+
+## Explicit failover and self-hosted models
+
+Any compatible endpoint can be hosted on your own GPU or a rented GPU. No hosted-API account is required for creative roles when their routes point to your own inference server. See [self-hosting and Vast.ai](self-hosted-llm.md) for network setup, a complete configuration and the separate future GPU-provisioning design.
+
+```toml
+# Both provider names must already exist in [providers.*].
+[fallbacks]
+director = [{provider = "local", model = "vmerger-planner"}]
+editor = [{provider = "local", model = "vmerger-planner"}]
+```
+
+Lists are per role, ordered, and capped at two backups. A route cannot repeat the primary or another backup. Only `director`, `music`, `editor` and `reviewer` support fallback. A transient inference failure (network/timeout, 429 or 5xx) advances to the next route. Authentication/configuration errors, other 4xx, invalid output, refusals, truncation and audit/database errors propagate immediately. A valid reviewer rejection remains a rejection. Exhaustion raises a retryable job error; every new call starts at its primary, without a shared circuit breaker.
+
+Each attempt has its own `ai_calls` row and target-specific fingerprint, including failed primaries. `/api/config` and the AI team view list fallback providers/models and credential readiness without endpoints or keys. Availability flags describe primary configuration; a missing backup key is shown separately and fails if that backup is reached. Backups are never silently skipped. Adding a destination explicitly permits sending that role's inputs to it.
+
+Analyst fallback is rejected because native-video and image-sampling capabilities differ. Embedding fallback is rejected because a different model must not silently change vector space. These routes can still be changed explicitly using the documented capabilities and reindex flow. GPU startup, rental, teardown and cost caps are not part of the inference router.
 
 ## Video capabilities
 
