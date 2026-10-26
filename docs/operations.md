@@ -44,6 +44,22 @@ Provider call history records the actual provider/model, purpose, status, latenc
 
 Workers heartbeat their leases. Expired jobs return to the queue unless cancelled or out of attempts. A stale lease cannot publish; a stale parent version cannot replace the current story. Inspect job status and worker logs before retrying work. Configuration, validation and reviewer failures need a corrected input or configuration.
 
+```mermaid
+stateDiagram-v2
+    [*] --> queued: enqueue
+    queued --> running: claim
+    running --> succeeded: publish
+    running --> queued: retry / lease expiry
+    running --> failed: fatal / exhausted
+    queued --> cancelled: cancel
+    running --> cancelled: cancel
+    succeeded --> [*]
+    failed --> [*]
+    cancelled --> [*]
+```
+
+Retryable worker exceptions are `ConnectionError` and `TimeoutError`; they use a 10-second delay. Lease expiry is reclaimed when workers next claim work. Cancellation takes effect when observed by the worker or claim sweep, and immediately disqualifies the job from publication checks.
+
 The cleanup command removes failed storage objects only when no asset, render or derivative references them:
 
 ```sh

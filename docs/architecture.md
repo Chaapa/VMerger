@@ -3,15 +3,29 @@
 VMerger is a single-owner application with a FastAPI service and separate worker processes. PostgreSQL stores project state, jobs and edit history. S3 stores media; workers use temporary local files during processing.
 
 ```mermaid
-flowchart LR
-    Browser[React workspace] --> API[FastAPI]
-    API <--> DB[(PostgreSQL + pgvector)]
-    API <--> S3[(Private S3)]
-    Worker[Workers] <--> DB
-    Worker <--> S3
-    Worker --> Models[Role-specific AI providers]
-    Worker --> FFmpeg[FFmpeg]
+flowchart TB
+    UI["React workspace"] -->|session + project requests| API["FastAPI"]
+    API <--> DB[("PostgreSQL + pgvector<br/>State · leases · observations")]
+    API <--> S3[("Private S3<br/>Originals + finished films")]
+    W["Workers<br/>AI and render queues"] <--> DB
+    W <--> S3
+    W --> R["AI router<br/>Provider + model per role"]
+    C["config/ai.toml<br/>+ secret environment variables"] --> R
+    R --> G["Gemini adapter"]
+    R --> O["OpenAI-compatible adapter<br/>Hosted or self-hosted endpoint"]
+    W --> F["FFmpeg<br/>Disposable local scratch files"]
+    P["Prometheus"] -->|authenticated scrape| API
+    GR["Grafana"] -->|queries| P
+
+    classDef app fill:#e8f3ec,stroke:#4c7a60,color:#183d2b
+    classDef data fill:#f7f1df,stroke:#9a824d,color:#4a3d20
+    classDef compute fill:#edf0f8,stroke:#687caa,color:#283a61
+    class UI,API,W,P,GR app
+    class DB,S3,C data
+    class R,G,O,F compute
 ```
+
+[Agent workflow](../README.md#workflow) · [Version lifecycle](#version-lifecycle) · [Jobs and concurrency](#jobs-and-concurrent-edits) · [Data model](#data-and-search)
 
 ## Code map
 
@@ -48,6 +62,49 @@ Plans contain source UUIDs, clip ranges, effect names and an optional music asse
 
 Approved plans are immutable `edit_versions`. A render job downloads the required media, assembles video and audio, fully decodes the result and verifies its S3 upload. Only then can the version become current. FFmpeg scratch files are removed after processing.
 
+## Version lifecycle
+
+A chat revision creates a planning job and then a separate render job. This sequence shows the successful path for one story; the same worker process can serve both queues.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor UI as User / workspace
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant Plan as Planning job
+    participant AI as AI router
+    participant Render as Render job
+    participant S3 as Private S3
+
+    UI->>API: Message + request ID + current version
+    API->>DB: Check ownership, deduplicate, enqueue
+    API-->>UI: Accepted message
+
+    Plan->>DB: Claim job with fresh lease
+    Plan->>AI: Director → music → editor
+    AI-->>Plan: Structured candidate plan
+    Plan->>Plan: Validate sources, times, effects and music rights
+    Plan->>AI: Review validated plan
+    AI-->>Plan: Approved
+    Plan->>DB: Check lease + expected version
+    Note over DB,Plan: One transaction: immutable plan,<br/>render job, planning success
+
+    Render->>DB: Claim render job with fresh lease
+    Render->>S3: Download required sources
+    Render->>Render: Validate, render, fully decode
+    Render->>S3: Upload + read-back hash verification
+    Render->>DB: Check lease + unchanged parent
+    Note over DB,Render: One transaction: available media,<br/>ready render, current version, job success
+
+    UI->>API: Poll project snapshot
+    API->>DB: Read versions and job state
+    API-->>UI: New version + render storage ID
+    UI->>API: Play through authenticated media route
+```
+
+Heartbeats keep each lease alive during work. Validation or review failure stops planning. If a lease is lost or a newer version wins, publication is rejected; [failure recovery](operations.md#failure-recovery) covers retries and leftover objects.
+
 ## Jobs and concurrent edits
 
 [`jobs.claim`](../vmerger/jobs.py) selects work with `FOR UPDATE SKIP LOCKED` in a short transaction. Each claim creates a fresh lease token. A heartbeat extends that lease while processing; expired work can be retried up to its attempt limit.
@@ -67,6 +124,29 @@ The initial schema is in [`migrations/sql/001_initial.sql`](../migrations/sql/00
 - Stories retain immutable plans and a pointer to the current rendered version.
 - Scene embeddings use normalized 768-dimensional vectors and a profile key.
 - `ai_calls` stores provider attempts; `eval_results` stores rule/provider observations.
+
+<details>
+<summary>Core data relationships</summary>
+
+```mermaid
+erDiagram
+    PROJECT ||--o{ ASSET : owns
+    ASSET ||--o{ SEGMENT : describes
+    SEGMENT ||--o{ SEGMENT_EMBEDDING : embeds
+    STORAGE_OBJECT ||--o| ASSET : stores
+    PROJECT ||--o{ STORY : contains
+    STORY ||--o{ EDIT_VERSION : retains
+    EDIT_VERSION ||--o{ RENDER : renders
+    STORAGE_OBJECT |o--o{ RENDER : stores
+    PROJECT ||--o{ MESSAGE : records
+    PROJECT ||--o{ JOB : queues
+    JOB |o--o{ AI_CALL : audits
+    JOB ||--o{ EVAL_RESULT : measures
+```
+
+This is a subset of the schema. `SEGMENT` is a scene; embeddings are keyed by scene and profile. `STORY.current_version_id` points to the published version, while `EDIT_VERSION.parent_version_id` preserves its predecessor. A render may lack a storage reference until ready. Project-scoped foreign keys prevent cross-project references.
+
+</details>
 
 Search is scoped to the authenticated project. Full-text search works without a model. Semantic search uses an exact query over the selected embedding profile; the schema's partial HNSW index is not a measured performance claim. A missing vector in the selected profile produces HTTP 409 until reindexing completes. Old profiles are retained.
 
