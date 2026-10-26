@@ -62,7 +62,7 @@ Legacy installations can explicitly set `settings.ai_config_file=None` programma
 
 ## Explicit failover and self-hosted models
 
-Any compatible endpoint can be hosted on your own GPU or a rented GPU. No hosted-API account is required for creative roles when their routes point to your own inference server. See [self-hosting and Vast.ai](self-hosted-llm.md) for network setup, a complete configuration and the separate future GPU-provisioning design.
+Any compatible endpoint can be hosted on your own GPU or a rented GPU. No hosted-API account is required for creative roles when their routes point to your own inference server. See [self-hosting and Vast.ai](self-hosted-llm.md) for network setup and a complete configuration.
 
 ```toml
 # Both provider names must already exist in [providers.*].

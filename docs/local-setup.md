@@ -39,7 +39,7 @@ $env:PLAYWRIGHT_CHANNEL='chrome'
 pnpm --dir web exec playwright test
 ```
 
-The browser check uses installed Chrome and a running API with live AI disabled. It creates an empty **Local validation** project; docs/images contains actual interface screenshots. Media tests use explicitly labeled color clips/signals, not invented AI results.
+The browser check uses installed Chrome and a running API with live AI disabled. It creates an empty **Local validation** project; docs/images contains actual interface screenshots. Media tests generate color clips and audio signals as fixtures. See [testing](testing.md) for suite coverage and limitations.
 
 ## Shutdown
 

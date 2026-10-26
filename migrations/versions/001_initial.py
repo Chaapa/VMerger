@@ -9,7 +9,7 @@ down_revision = None
 
 
 def upgrade():
-    source = Path(__file__).resolve().parents[2] / "docs" / "schema.sql"
+    source = Path(__file__).resolve().parents[1] / "sql" / "001_initial.sql"
     sql = source.read_text(encoding="utf-8").replace("BEGIN;", "").replace("COMMIT;", "")
     op.get_bind().exec_driver_sql(sql)
     op.execute("""CREATE TABLE eval_results (

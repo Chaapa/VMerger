@@ -40,7 +40,7 @@ Run `docker compose --profile monitoring up -d`. Grafana and Prometheus remain o
 
 For a simple consistent alpha backup, stop API/worker with `docker compose stop api worker`, create a custom-format `pg_dump` from the database container and snapshot/copy **all of MEDIA_ROOT**, including filer metadata. Restart services afterward. SeaweedFS volume files without metadata are not a complete backup. Keep an encrypted copy off-server and preserve secrets and code version separately.
 
-Test restoration on an empty independent installation: restore the dump and complete SeaweedFS directory, start the same code version, check readiness/sign-in, read sources, verify hashes, play old versions and produce a new render. Apply later migrations afterward. **RPO/RTO are unmeasured**; values in the operations design are targets.
+Test restoration on an empty independent installation: restore the dump and complete SeaweedFS directory, start the same code version, check readiness/sign-in, read sources, verify hashes, play old versions and produce a new render. Apply later migrations afterward. **RPO/RTO are unmeasured**. Record them during a restore exercise on your deployment.
 
 ## Updates and maintenance
 
