@@ -2,7 +2,7 @@
 
 VMerger can call a hosted API, a model on your own GPU, or a model on a rented GPU. A compatible server only requires a different `base_url`, model and credential variable; agents and the editing pipeline remain shared. A NAS can store media while a separate machine performs inference.
 
-**Implemented:** compatible endpoints and ordered creative-role fallback to already running servers. **Planned:** automatic GPU rental, model-startup waiting and rental release. The repository has no Vast.ai infrastructure-management client, and the application creates no paid resources.
+Backups must already be running. VMerger does not provision, rent or release GPUs; manage that lifecycle outside the application.
 
 ## Connections
 
@@ -88,30 +88,3 @@ An empty list disables fallback. Analyst fallback is currently prohibited becaus
 ## Observability
 
 **Quality and agents → AI team** displays primary routes, backup order and credential availability. This is configuration, not a health probe. Each `ai_calls` row records the actual provider/model, role, status, duration and known tokens for one attempt. Failed primary attempts remain even when a backup succeeds. Latency charts count attempts, and the provider-error counter includes failures before successful backup; neither is a count of failed user jobs.
-
-A future controller needs separate measurements for backup-recovered jobs, switch frequency/cause, p95 model startup, GPU provisioning success, idle time and rental cost. These are not current dashboard metrics; they need logical-call IDs, switching events and billing data.
-
-## Automatic rental after failure: a future controller
-
-```mermaid
-stateDiagram-v2
-    [*] --> Primary
-    Primary --> Done: Successful result
-    Primary --> WaitingCapacity: Transient failure
-    WaitingCapacity --> Provisioning: Budget and lease allow rental
-    WaitingCapacity --> Failed: Budget or deadline exhausted
-    Provisioning --> Loading: GPU created
-    Provisioning --> Reconcile: Failed or uncertain API result
-    Loading --> Ready: Tunnel and inference probe pass
-    Loading --> Reconcile: Model loading timeout
-    Ready --> Done: Resume saved job
-    Done --> Idle: No waiting jobs
-    Idle --> Reconcile: Idle TTL expired
-    Reconcile --> Released: Instance released
-```
-
-This is a separate infrastructure controller, not a creative-agent tool. PostgreSQL records model profile, request/instance ID, state, lease, deadline, price cap and idle TTL. One lease per profile prevents ten workers from renting ten machines. After an uncertain API response, reconcile instances by request tag before buying again. Only the controller holds Vast credentials.
-
-Check current price, GPU/VRAM, pinned image/weight revisions, instance limit and total budget. Waiting jobs release worker capacity and resume after readiness. Downloading weights may exceed a normal request, so provisioning must not run inside the existing 120-second transport timeout. A watchdog reconciles abandoned rentals after restarts and releases them under TTL; monitoring reports provisioning failures and spend.
-
-Stopped Vast instances still incur storage charges. Cleanup must therefore include controlled deletion of unneeded instances, not only stop. Check compute, disk and bandwidth prices at rental time; see [Vast.ai billing](https://docs.vast.ai/guides/pricing). Automatic rental, budget control and this lifecycle **are not implemented or tested on real GPUs**.

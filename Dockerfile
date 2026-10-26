@@ -14,7 +14,6 @@ COPY requirements.lock pyproject.toml LICENSE ./
 RUN pip install --no-cache-dir -r requirements.lock
 COPY vmerger/ vmerger/
 COPY migrations/ migrations/
-COPY docs/schema.sql docs/schema.sql
 COPY alembic.ini ./
 COPY config/ config/
 COPY --from=web /web/dist web/dist
