@@ -1,15 +1,56 @@
 # VMerger
 
+**Your footage, shaped into stories through a conversation.**
+
 Turn a collection of video clips into a short film through chat. VMerger analyzes footage, builds a structured edit plan and renders it with FFmpeg. Originals and finished videos live in your own S3 storage.
 
 [![Verify](https://github.com/Chaapa/VMerger/actions/workflows/ci.yml/badge.svg)](https://github.com/Chaapa/VMerger/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+[Quick start](#run-locally) · [Workflow](#workflow) · [Architecture](docs/architecture.md) · [Documentation](#documentation)
 
 **Status: single-owner alpha.** Storage, rendering and orchestration have integration tests; live-model editing quality has not been evaluated.
 
 ![VMerger project workspace with sources, stories and chat](docs/images/project.png)
 
 *Application screenshot from the browser smoke test. The project is empty and AI providers are disconnected.*
+
+<details>
+<summary>More of the workspace</summary>
+
+### Projects
+
+![VMerger project list](docs/images/workspace.png)
+
+### Measurements
+
+![VMerger measurements view](docs/images/metrics.png)
+
+These browser smoke-test captures show the interface before real project measurements exist.
+
+</details>
+
+## System overview
+
+```mermaid
+flowchart TB
+    UI["React workspace<br/>Stories · chat · player"] --> API["FastAPI<br/>Owner session + project scope"]
+    API <--> DB[("PostgreSQL + pgvector<br/>Scenes · versions · job queue")]
+    API <--> S3[("Private S3<br/>Sources + finished films")]
+    W["Workers<br/>Leases + publication checks"] <--> DB
+    W <--> S3
+    W --> AI["AI providers<br/>Model routes per role"]
+    W --> F["FFmpeg<br/>Render + full decode check"]
+
+    classDef app fill:#e8f3ec,stroke:#4c7a60,color:#183d2b
+    classDef data fill:#f7f1df,stroke:#9a824d,color:#4a3d20
+    classDef compute fill:#edf0f8,stroke:#687caa,color:#283a61
+    class UI,API,W app
+    class DB,S3 data
+    class AI,F compute
+```
+
+Media stays in your S3 storage. Hosted AI routes receive a proxy, frames or text for their role; [self-hosted inference](docs/self-hosted-llm.md) keeps that processing on your own endpoints.
 
 ## Run locally
 
@@ -44,6 +85,40 @@ Using Windows without Docker? See [native setup](docs/local-setup.md). For a rem
 6. Request a change in chat. Each edit creates a new version; earlier versions remain available.
 
 Music comes from tracks you import with confirmed usage rights. Supported effects are `none`, `warm`, `monochrome` and `fade`.
+
+<details>
+<summary>Inside the agent workflow</summary>
+
+```mermaid
+flowchart TB
+    V["Uploaded clips"] --> A["Analyst<br/>Scenes + source times"]
+    A --> C[("Scene catalog + embeddings")]
+    C --> D["Director<br/>Group events into stories"]
+    U["Brief or chat revision"] --> D
+    D --> M["Music<br/>Choose a track or no music"]
+    L[("Imported music<br/>Confirmed usage rights")] --> M
+    M --> E["Editor<br/>Cuts · pacing · allowed effects"]
+    E --> B{"Deterministic<br/>validation"}
+    B -->|valid| Q["Reviewer<br/>Source support + user constraints"]
+    B -->|invalid| X["Attempt stops<br/>Revise input or configuration"]
+    Q -->|rejected| X
+    Q -->|approved| P["Immutable JSON plan"]
+    P --> F["Render job<br/>FFmpeg + decode + verified upload"]
+    F --> O["Publish version<br/>Valid lease + unchanged parent"]
+
+    classDef agent fill:#e8f3ec,stroke:#4c7a60,color:#183d2b
+    classDef data fill:#f7f1df,stroke:#9a824d,color:#4a3d20
+    classDef check fill:#edf0f8,stroke:#687caa,color:#283a61
+    classDef stop fill:#faeaea,stroke:#ad6060,color:#6b2929
+    class A,D,M,E,Q agent
+    class V,C,U,L,P data
+    class B,F,O check
+    class X stop
+```
+
+Analysis builds the catalog first. Planning then makes one pass per story through music selection, editing, validation and review. A rejected plan stops the attempt; agents do not automatically negotiate a repair.
+
+</details>
 
 ## Engineering decisions
 
