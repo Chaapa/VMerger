@@ -48,7 +48,6 @@ Workers heartbeat their leases. Expired jobs return to the queue unless cancelle
 stateDiagram-v2
     [*] --> queued: enqueue
     queued --> running: claim
-    running --> running: heartbeat
     running --> succeeded: publish
     running --> queued: retry / lease expiry
     running --> failed: fatal / exhausted
